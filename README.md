@@ -10,10 +10,13 @@ Assign values to your preference workspace folders:
 
 ;; Collabora Online workspace directory
 (setq hcv-cool-workspace-dir "/path/to/your/cool/workspace/"))
+
 ;; Collabora Online output build directory
 (setq hcv-cool-build-dir "/path/to/your/cool/build/"))
+
 ;; Libre Office workspace directory
 (setq hcv-lo-workspace-dir "/path/to/your/lo/worspace/"))
+
 ;; Libre Office output build directory
 (setq hcv-lo-build-dir "/path/to/your/lo/build/"))
 
