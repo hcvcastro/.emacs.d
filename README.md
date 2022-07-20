@@ -23,9 +23,11 @@ Assign values to your preference workspace folders:
 Check out a local branch to your workspace folder:
 
 git worktree add /path/to/your/cool/workspace/test test
+
 git worktree add /path/to/your/lo/workspace/test test
 
 cd /path/to/your/cool/workspace/test
+
 emacs
 
 Run configure command
