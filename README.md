@@ -58,3 +58,9 @@ Run
 C-c x
 
 Happy hacking
+
+
+TODO
+* Custom buffer to read Makefile targets
+* Custom variables
+* Package if it is useful
