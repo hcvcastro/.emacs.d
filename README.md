@@ -7,7 +7,7 @@ for coding and I do not like my workspace folder be contaminated with
 the generated build output.
 
 Assign values to your preference workspace folders:
-```
+```elisp
 ;; Collabora Online workspace directory
 (setq hcv-cool-workspace-dir "/path/to/your/cool/workspace/"))
 
@@ -22,14 +22,14 @@ Assign values to your preference workspace folders:
 ```
 
 Check out a local branch to your workspace folder:
-```
-git worktree add /path/to/your/cool/workspace/test test
+```console
+~$ git worktree add /path/to/your/cool/workspace/test test
 
-git worktree add /path/to/your/lo/workspace/test test
+~$ git worktree add /path/to/your/lo/workspace/test test
 
-cd /path/to/your/cool/workspace/test
+~$ cd /path/to/your/cool/workspace/test
 
-emacs
+~$ emacs
 ```
 
 Run configure command
@@ -43,7 +43,7 @@ Push the button "Configure"
 
 (Optional) You can define your default config values
 in a file.
-```
+```elisp
 (setq hcv-config-default "~/config.default")
 ```
 
