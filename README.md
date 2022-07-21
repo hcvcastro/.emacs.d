@@ -22,7 +22,7 @@ Assign values to your preference workspace folders:
 ```
 
 Check out a local branch to your workspace folder:
-```console
+```bash
 ~$ git worktree add /path/to/your/cool/workspace/test test
 
 ~$ git worktree add /path/to/your/lo/workspace/test test
@@ -33,8 +33,9 @@ Check out a local branch to your workspace folder:
 ```
 
 Run configure command
-
+```
 ‘M-x hcv-configure’
+```
 
 Edit your config parameters into interactive custom buffer
 "*Collabora Online Configure*"
@@ -54,12 +55,14 @@ For example, I like to build Libre Office:
 ```
 
 Compile
-
+```
 ‘M-x compile’ or C-c c
+```
 
 Run
-
+```
 C-c x
+```
 
 Happy hacking
 
