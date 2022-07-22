@@ -25,7 +25,7 @@ Check out a local branch to your workspace folder:
 ```bash
 ~$ git worktree add /path/to/your/cool/workspace/your-cool-branch your-cool-branch
 
-~$ git worktree add /path/to/your/lo/workspace/yout-lo-branch your-lo-branch
+~$ git worktree add /path/to/your/lo/workspace/your-lo-branch your-lo-branch
 
 ~$ cd /path/to/your/cool/workspace/test
 
