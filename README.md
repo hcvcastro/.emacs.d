@@ -64,6 +64,11 @@ Run
 C-c x
 ```
 
+Stop process
+```
+‘M-x comint-interrupt-subjob’ or C-c C-c
+```
+
 Happy hacking
 
 
