@@ -99,6 +99,8 @@
       (setf (cdr (assq 'eslint compilation-error-regexp-alist-alist)) (cdr form))
     (push form compilation-error-regexp-alist-alist)))
 
+(push 'eslint compilation-error-regexp-alist)
+
 ;; no scratch message
 (setq initial-scratch-message nil)
 ;; initial buffer -> dired
