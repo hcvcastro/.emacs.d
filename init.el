@@ -295,6 +295,13 @@
 (eval-when-compile
   (require 'wid-edit))
 
+(defun hcv-config-list-update ()
+  (setq hcv-config-list nil)
+  (setq hcv-config-list (hcv-read-configure-options hcv-configure-ac))
+  (setq hcv-config-list (hcv-read-default-environment hcv-config-list))
+  (if (not (hcv-read-config-status hcv-config-status))
+      (hcv-read-config-default hcv-config-default)))
+
 (defun hcv-configure ()
   (interactive)
   (switch-to-buffer hcv-config-buffer)
@@ -303,6 +310,7 @@
     (erase-buffer))
   (remove-overlays)
   (widget-insert (get 'hcv-config-buffer 'widget-title))
+  (hcv-config-list-update)
   (let ((config-list hcv-config-list)
 	(config)
 	(type))
