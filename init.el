@@ -193,7 +193,8 @@
   (let ((config-list nil)
 	(list-string nil)
 	(config-symbol nil)
-	(config-value nil))
+	(config-value nil)
+	(config-list-size nil))
     (if (file-exists-p config-status)
 	(progn (setq config-list (shell-command-to-string (concat config-status " --config")))
 	       (setq config-list (replace-regexp-in-string "'" "\"" config-list))
@@ -201,6 +202,7 @@
 	       (setq config-list (read-from-string config-list))
 	       (setq config-list (car config-list)))
       (setq config-list nil))
+    (setq config-list-size (length config-list))
     (while config-list
       (setq list-string (split-string (car config-list) "="))
       (setq config-symbol (intern (nth 0 list-string)))
@@ -211,7 +213,7 @@
 	    (set config-symbol config-value))
 	(set config-symbol t))
       (setq config-list (cdr config-list)))
-    (> (length config-list) 0)))
+    (> config-list-size 0)))
 
 (defun hcv-read-config-default (configure-default)
   (let ((config-list nil)
