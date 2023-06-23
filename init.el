@@ -204,7 +204,8 @@
       (setq config-list nil))
     (setq config-list-size (length config-list))
     (while config-list
-      (setq list-string (split-string (car config-list) "="))
+      (setq list-item (car config-list))
+      (setq list-string (split-string (if (symbolp list-item) (symbol-name list-item) list-item) "="))
       (setq config-symbol (intern (nth 0 list-string)))
       (setq config-value (nth 1 list-string))
       (if (> (length list-string) 1)
