@@ -2,6 +2,8 @@
 (when (< emacs-major-version 27)
   (package-initialize))
 
+(require 'widget)
+(require 'gnus)
 (require 'lsp-java)
 (require 'dap-java)
 
@@ -300,10 +302,6 @@
 (defun hcv-create-tags ()
     (interactive)
     (compile (concat "make -C " hcv-default-build-dir " tags")))
-
-
-(require 'widget)
-(require 'gnus)
 
 (eval-when-compile
   (require 'wid-edit))
