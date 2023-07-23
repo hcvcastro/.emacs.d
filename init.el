@@ -13,6 +13,10 @@
 ;; Highlight tabulations
 ;;(setq-default highlight-tabs t)
 
+;; which key minor mode
+(which-key-mode t)
+(define-key help-map "\C-h" 'which-key-C-h-dispatch)
+
 ;; Ask "y" or "n" instead of "yes" or "no".
 (fset 'yes-or-no-p 'y-or-n-p)
 
