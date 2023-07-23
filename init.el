@@ -1,5 +1,7 @@
 (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3")
-(package-initialize)
+(when (< emacs-major-version 27)
+  (package-initialize))
+
 
 ;; custom variables
 (setq custom-file "~/.emacs.d/custom-file.el")
