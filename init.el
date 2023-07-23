@@ -2,6 +2,8 @@
 (when (< emacs-major-version 27)
   (package-initialize))
 
+(require 'lsp-java)
+(require 'dap-java)
 
 ;; custom variables
 (setq custom-file "~/.emacs.d/custom-file.el")
@@ -119,6 +121,7 @@
 					 (read-only-mode t))))
 (add-hook 'prog-mode-hook (lambda () (setq show-trailing-whitespace t)))
 (add-hook 'prog-mode-hook 'superword-mode)
+(add-hook 'java-mode-hook #'lsp)
 
 ;; apply ansi color to compilation buffer
 (defun hcv-ansi-colorize-buffer ()
