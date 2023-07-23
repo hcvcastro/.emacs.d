@@ -107,7 +107,10 @@
 (if (= (length command-line-args) 1) (setq initial-buffer-choice default-directory))
 
 ;; defaul prog mode read only buffers
-(add-hook 'prog-mode-hook 'read-only-mode)
+(add-hook 'prog-mode-hook (lambda () (if (and (buffer-file-name)
+					      (not (string-match (expand-file-name user-emacs-directory)
+								 (buffer-file-name))))
+					 (read-only-mode t))))
 (add-hook 'prog-mode-hook (lambda () (setq show-trailing-whitespace t)))
 (add-hook 'prog-mode-hook 'superword-mode)
 
