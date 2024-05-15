@@ -2,10 +2,11 @@
 (when (< emacs-major-version 27)
   (package-initialize))
 
+(require 'transient)
+(require 'magit)
 (require 'widget)
 (require 'gnus)
-(require 'lsp-java)
-(require 'dap-java)
+(require 'eglot)
 
 ;; custom variables
 (setq custom-file "~/.emacs.d/custom-file.el")
@@ -48,6 +49,9 @@
 ;; turn off auto save
 (setq auto-save-default nil)
 
+;; save history commands
+(savehist-mode 1)
+
 ;; debugging preferences
 (setq gud-chdir-before-run nil)
 (setq comint-prompt-read-only t)
@@ -80,15 +84,28 @@
 	(if overwrite-mode (send-string-to-terminal "\e[1 q")
 	  (send-string-to-terminal "\e[5 q")))))
 
-;; generic helpers
-(global-set-key "\C-cb" 'list-buffers)
-(global-set-key "\C-cr" 'list-registers)
-(global-set-key "\C-cf" 'recentf-open-files)
-(global-set-key "\C-cl" 'bookmark-bmenu-list)
-(global-set-key "\C-cy" '(lambda () (interactive) (popup-menu 'yank-menu)))
-(global-set-key "\C-cc" 'compile)
-(global-set-key "\C-cx" '(lambda () (interactive) (async-shell-command hcv-run-command)))
-(global-set-key "\C-cz" '(lambda () (interactive) (async-shell-command hcv-head-config)))
+
+;; Behave like vi's o command
+(defun open-next-line (arg)
+  "Move to the next line and then opens a line.
+    See also `newline-and-indent'."
+  (interactive "p")
+  (end-of-line)
+  (open-line arg)
+  (forward-line 1)
+  (indent-according-to-mode))
+
+;; Behave like vi's O command
+(defun open-previous-line (arg)
+  "Open a new line before the current one.
+     See also `newline-and-indent'."
+  (interactive "p")
+  (beginning-of-line)
+  (open-line arg)
+  (indent-according-to-mode))
+
+(global-set-key (kbd "C-o") 'open-next-line)
+(global-set-key (kbd "M-o") 'open-previous-line)
 
 ;; compile error for jslint
 ;; https://github.com/Fuco1/compile-eslint/blob/master/compile-eslint.el
@@ -123,7 +140,7 @@
 					 (read-only-mode t))))
 (add-hook 'prog-mode-hook (lambda () (setq show-trailing-whitespace t)))
 (add-hook 'prog-mode-hook 'superword-mode)
-(add-hook 'java-mode-hook #'lsp)
+;;(add-hook 'java-mode-hook #'lsp)
 
 ;; apply ansi color to compilation buffer
 (defun hcv-ansi-colorize-buffer ()
@@ -163,6 +180,7 @@
 (setq hcv-configure nil)
 (setq hcv-config-buffer nil)
 (setq hcv-config-list nil)
+(setq hcv-default-build-dir "")
 
 (defun hcv-read-configure-option (configure-string configure-description)
   (let* ((list-string (split-string configure-string "="))
@@ -389,3 +407,46 @@
 (defun hcv-execute-copy-clipboard (&rest ignore)
   (let ((cmd (hcv-get-shell-command hcv-config-list)))
     (xclip-set-selection 'clipboard cmd)))
+
+(setf (cdr (assoc '(java-mode java-ts-mode) eglot-server-programs))
+      (list "jdtls" (concat "-configuration " (expand-file-name user-emacs-directory) ".jdtls")
+	    (concat "-data " (expand-file-name user-emacs-directory) ".jdtls")))
+
+;; (setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
+;;       (list "ccls" (concat "--init={\"compilationDatabaseDirectory\":  \"" hcv-default-build-dir "\", "
+;; 			   "\"cache\": {\"directory\": \"" hcv-default-build-dir "\"}, "
+;; 			   "\"index\": {\"threads\" : " hcv-num-cores "}}")))
+
+(setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
+      (list "clangd" :initializationOptions `(:compilationDatabasePath ,hcv-default-build-dir)))
+
+
+;; (setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
+;;      (list "typescript-language-server" "--stdio" "--log-level" "4" "--tsserver-log-verbosity" "verbose" :initializationOptions
+;; 	    `(tsserver: (logVerbosity: "verbose" logDirectory: ,hcv-default-build-dir))))
+;; (setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
+;;      (list "typescript-language-server" "--stdio" :initializationOptions
+;; 	    `(:tsserver (:logVerbosity "verbose" :logDirectory ,hcv-default-build-dir))))
+;; :useSyntaxServer "never"
+
+(setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
+      (list "deno" "lsp" :initializationOptions `(:enable t :lint t)))
+
+
+(global-set-key "\C-cc" 'hcv-main-commands)
+(transient-define-prefix hcv-main-commands ()
+			 "Main Commands."
+			 ["Commands: "
+			  ("o" "*Open Recent*" recentf-open-files)
+			  ("b" "*Buffer List*" list-buffers)
+			  ("k" "*Bookmark List*" bookmark-bmenu-list)
+			  ("g" "*Register List*" list-registers)
+			  ("f" "" hcv-configure :description ,hcv-config-buffer)
+			  ("s" "Select Yank" (lambda () (interactive) (redisplay) (popup-menu 'yank-menu)))
+			  ("c" "Compile Command" compile)
+			  ("r" "Run Command" (lambda(command)
+					       (interactive (list (read-shell-command
+								   "Run command: "
+								   hcv-run-command)))
+					       (async-shell-command command)))
+			  ("l" "Config Log" (lambda() (interactive) (async-shell-command hcv-head-config)))])
