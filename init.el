@@ -2,15 +2,15 @@
 (when (< emacs-major-version 27)
   (package-initialize))
 
+;; custom variables
+(setq custom-file "~/.emacs.d/custom-file.el")
+(load custom-file)
+
 (require 'transient)
 (require 'magit)
 (require 'widget)
 (require 'gnus)
 (require 'eglot)
-
-;; custom variables
-(setq custom-file "~/.emacs.d/custom-file.el")
-(load custom-file)
 
 ;; Highlight corresponding parentheses when cursor is on one
 (show-paren-mode t)
