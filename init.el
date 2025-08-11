@@ -408,17 +408,17 @@
   (let ((cmd (hcv-get-shell-command hcv-config-list)))
     (xclip-set-selection 'clipboard cmd)))
 
-(setf (cdr (assoc '(java-mode java-ts-mode) eglot-server-programs))
-      (list "jdtls" (concat "-configuration " (expand-file-name user-emacs-directory) ".jdtls")
-	    (concat "-data " (expand-file-name user-emacs-directory) ".jdtls")))
+;(setf (cdr (assoc '(java-mode java-ts-mode) eglot-server-programs))
+;      (list "jdtls" (concat "-configuration " (expand-file-name user-emacs-directory) ".jdtls")
+;	    (concat "-data " (expand-file-name user-emacs-directory) ".jdtls")))
 
 ;; (setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
 ;;       (list "ccls" (concat "--init={\"compilationDatabaseDirectory\":  \"" hcv-default-build-dir "\", "
 ;; 			   "\"cache\": {\"directory\": \"" hcv-default-build-dir "\"}, "
 ;; 			   "\"index\": {\"threads\" : " hcv-num-cores "}}")))
 
-(setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
-      (list "clangd" :initializationOptions `(:compilationDatabasePath ,hcv-default-build-dir)))
+;;(setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
+;;      (list "clangd" :initializationOptions `(:compilationDatabasePath ,hcv-default-build-dir)))
 
 
 ;; (setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
@@ -429,8 +429,8 @@
 ;; 	    `(:tsserver (:logVerbosity "verbose" :logDirectory ,hcv-default-build-dir))))
 ;; :useSyntaxServer "never"
 
-(setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
-      (list "deno" "lsp" :initializationOptions `(:enable t :lint t)))
+;;(setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
+;;      (list "deno" "lsp" :initializationOptions `(:enable t :lint t)))
 
 
 (global-set-key "\C-cc" 'hcv-main-commands)
