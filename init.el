@@ -189,6 +189,18 @@
 (defvar hcv-cool-config-buffer (format "*%s*" hcv-cool-project-name)
   "Buffer name for the COOL configure UI.")
 
+(defvar hcv-cool-derived-defaults
+  '(("--with-lokit-path"
+     . (lambda ()
+         (expand-file-name "engine/include" command-line-default-directory)))
+    ("--with-lo-path"
+     . (lambda ()
+         (expand-file-name "instdir" hcv-co-default-build-dir))))
+  "Derived default values for COOL options.
+Each entry is (OPTION-STRING . THUNK).  The thunk is called with no
+arguments and must return a string.  Applied after `config.status' and
+the defaults file; only fills options whose current value is empty.")
+
 ;; --- Per-project paths (Office) ---
 (defvar hcv-co-config-list nil
   "Current option list for Office, populated by `hcv-configure'.")
@@ -241,6 +253,20 @@ Respects single and double quotes.  Does not handle escape sequences."
     (when current (push current tokens))
     (nreverse tokens)))
 
+(defun hcv--apply-derived-defaults (alist)
+  "For each (OPTION . THUNK) in ALIST, set option to (funcall THUNK) if empty.
+OPTION is looked up in `hcv--options-obarray'; if the symbol doesn't
+exist there (i.e. the option wasn't parsed from configure.ac), it's
+skipped.  Only symbols whose current value is an empty string are
+updated, so values set by `config.status' or the defaults file win."
+  (dolist (entry alist)
+    (let* ((option (car entry))
+           (thunk  (cdr entry))
+           (sym    (intern-soft option hcv--options-obarray)))
+      (when (and sym
+                 (stringp (symbol-value sym))
+                 (string-empty-p (symbol-value sym)))
+        (set sym (funcall thunk))))))
 
 (defun hcv-read-configure-option (configure-string configure-description)
   "Parse CONFIGURE-STRING and return a symbol describing the option.
@@ -396,6 +422,7 @@ Returns non-nil if at least one option was read, nil otherwise."
   (setq hcv-cool-config-list (hcv-read-default-environment hcv-cool-config-list))
   (unless (hcv-read-config-status hcv-cool-config-status)
     (hcv-read-config-default hcv-cool-config-default-ac))
+  (hcv--apply-derived-defaults hcv-cool-derived-defaults)
 
   ;; --- Office config (same workspace, separate source tree) ---
   (setq hcv-co-config-list (hcv-read-configure-options hcv-co-configure-ac))
@@ -417,19 +444,25 @@ Returns non-nil if at least one option was read, nil otherwise."
 (eval-when-compile
   (require 'wid-edit))
 
-(defun hcv-config-list-update (configure-ac configure-status configure-default-ac)
+(defun hcv-config-list-update (configure-ac configure-status configure-default-ac
+                                            &optional derived-defaults)
   "Build and return a fresh config list from CONFIGURE-AC.
 Apply values from CONFIGURE-STATUS if available; otherwise fall back to
-CONFIGURE-DEFAULT-AC."
+CONFIGURE-DEFAULT-AC.  If DERIVED-DEFAULTS is a non-nil alist of
+\(OPTION . THUNK), apply derived values for any option still unset after
+loading status/defaults."
   (let ((config-list (hcv-read-default-environment
                       (hcv-read-configure-options configure-ac))))
     (unless (hcv-read-config-status configure-status)
       (hcv-read-config-default configure-default-ac))
+    (when derived-defaults
+      (hcv--apply-derived-defaults derived-defaults))
     config-list))
 
 (defun hcv-configure (config-list-var configure-buffer configure-title
                                       configure-ac configure-status configure-default-ac
-                                      source-dir build-dir configure-file)
+                                      source-dir build-dir configure-file
+                                       &optional derived-defaults)
   "Render the configure buffer for CONFIGURE-BUFFER.
 CONFIG-LIST-VAR is the symbol of the global variable holding the option
 list for this project.  CONFIGURE-BUFFER is the name of the buffer to
@@ -445,7 +478,8 @@ passed to the execute/copy buttons."
   (widget-insert configure-title)
 
   (set config-list-var
-       (hcv-config-list-update configure-ac configure-status configure-default-ac))
+       (hcv-config-list-update configure-ac configure-status configure-default-ac
+                               derived-defaults))
 
   (dolist (config (symbol-value config-list-var))
     (let* ((type (get config 'widget-type))
@@ -536,7 +570,8 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
                  hcv-cool-config-default-ac
                  (expand-file-name command-line-default-directory)
                  hcv-cool-default-build-dir
-                 hcv-cool-configure-file))
+                 hcv-cool-configure-file
+                 hcv-cool-derived-defaults))
 
 (defun hcv-configure-co ()
   "Open the Collabora Office configure buffer."
