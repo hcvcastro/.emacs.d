@@ -515,16 +515,18 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
                  hcv-co-configure-file))
 
 (defun hcv-compile-cool ()
-  "Run make for COOL."
+  "Run make for COOL directly, without prompting."
   (interactive)
-  (let ((compile-command (concat "make -j " hcv-num-cores " -C " hcv-cool-default-build-dir)))
-    (call-interactively 'compile)))
+  (let ((cmd (concat "make -j " hcv-num-cores " -C " hcv-cool-default-build-dir)))
+    (add-to-history 'compile-history cmd)
+    (compile cmd)))
 
 (defun hcv-compile-co ()
-  "Run make for Office."
+  "Run make for Office directly, without prompting."
   (interactive)
-  (let ((compile-command (concat "make -C " hcv-co-default-build-dir)))
-    (call-interactively 'compile)))
+  (let ((cmd (concat "make -j " hcv-num-cores " -C " hcv-co-default-build-dir)))
+    (add-to-history 'compile-history cmd)
+    (compile cmd)))
 
 (defun hcv-run-cool ()
   "Run the configured run command for COOL."
