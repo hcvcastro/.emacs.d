@@ -1,3 +1,5 @@
+;;; config.el --- Collabora configure UI -*- lexical-binding: t; -*-
+
 (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.3")
 (when (< emacs-major-version 27)
   (package-initialize))
@@ -63,12 +65,6 @@
 ;; delete trailing whitespace before save
 (add-hook 'before-save-hook 'delete-trailing-whitespace)
 
-;; change cursor shape
-(add-hook 'buffer-list-update-hook 'hcv-change-cursor-shape)
-(add-hook 'read-only-mode-hook 'hcv-change-cursor-shape)
-(add-hook 'window-configuration-change-hook 'hcv-change-cursor-shape)
-(add-hook 'overwrite-mode-hook 'hcv-change-cursor-shape)
-
 ;;    \e[0 q or \e[ q: reset to whatever's defined in the profile settings
 ;;    \e[1 q: blinking block
 ;;    \e[2 q: steady block
@@ -84,6 +80,11 @@
 	(if overwrite-mode (send-string-to-terminal "\e[1 q")
 	  (send-string-to-terminal "\e[5 q")))))
 
+;; change cursor shape
+(add-hook 'buffer-list-update-hook 'hcv-change-cursor-shape)
+(add-hook 'read-only-mode-hook 'hcv-change-cursor-shape)
+(add-hook 'window-configuration-change-hook 'hcv-change-cursor-shape)
+(add-hook 'overwrite-mode-hook 'hcv-change-cursor-shape)
 
 ;; Behave like vi's o command
 (defun open-next-line (arg)
@@ -149,304 +150,458 @@
 
 (add-hook 'compilation-filter-hook 'hcv-ansi-colorize-buffer)
 
+(defvar build-default-directory (purecopy command-line-default-directory)
+  "Default directory used for build output paths.")
 
-;; setup default build output directory
-(setq build-default-directory (purecopy command-line-default-directory))
-(setq build-default-directory (replace-regexp-in-string "projects" "build" build-default-directory))
+(defvar hcv-num-cores
+  (substring (shell-command-to-string "grep -c ^processor /proc/cpuinfo") nil -1)
+  "Number of CPU cores, used for parallel make.")
 
-;; get the number of cpu cores
-(setq hcv-num-cores (substring (shell-command-to-string "grep -c ^processor /proc/cpuinfo") nil -1))
+(if (string-match-p "projects" user-emacs-directory)
+	(setq build-default-directory (replace-regexp-in-string "projects" "build" build-default-directory))
+	(setq build-default-directory (replace-regexp-in-string "develop" "build" build-default-directory)))
 
-;; --- configure custom buffer
-
-;; Collabora Online workspace directory
-(setq hcv-cool-workspace-dir (expand-file-name "~/projects/online/bin"))
-;; Collabora Online output build directory
-(setq hcv-cool-build-dir (expand-file-name "~/build/online/bin"))
-;; Libre Office workspace directory
-(setq hcv-lo-workspace-dir (expand-file-name "~/projects/online/lib/core"))
-;; Libre Office output build directory
-(setq hcv-lo-build-dir (expand-file-name "~/build/online/lib/core"))
+(defvar hcv-cool-workspace-dir (expand-file-name "~/develop/online/bin")
+  "Source workspace for COOL.")
+(defvar hcv-cool-build-dir (expand-file-name "~/build/online/bin")
+  "Build directory root for COOL.")
 
 ;; custom local variables default directory
 (dir-locals-set-class-variables
  'my-default-dir (list (cons 'nil (list (cons 'default-directory command-line-default-directory)))))
 (dir-locals-set-directory-class command-line-default-directory 'my-default-dir)
 
-;; configure.ac file
-(setq hcv-configure-ac "configure.ac")
-;; default configure parameters preferences directory
-(setq hcv-config-default "~/config.default")
-(setq hcv-configure nil)
-(setq hcv-config-buffer nil)
-(setq hcv-config-list nil)
-(setq hcv-default-build-dir "")
+;; --- Per-project paths (COOL) ---
+(defvar hcv-cool-configure-ac "configure.ac"
+  "Path to COOL's configure.ac file, relative to the source tree.")
+(defvar hcv-cool-config-default-ac "~/cool-config.default"
+  "Path to a file with default values for COOL options.")
+(defvar hcv-cool-config-list nil
+  "Current option list for COOL, populated by `hcv-configure'.")
+(defvar hcv-cool-default-build-dir ""
+  "Build directory for COOL.  Set by the workspace setup block.")
+(defvar hcv-cool-config-status nil
+  "Path to the `config.status' script in COOL's build directory.")
+(defvar hcv-cool-configure-file "configure"
+  "Script to run from the source tree to configure COOL.")
+(defvar hcv-cool-project-name "Collabora Online Configure"
+  "Display name for the COOL configure UI.")
+(defvar hcv-cool-config-buffer (format "*%s*" hcv-cool-project-name)
+  "Buffer name for the COOL configure UI.")
+
+;; --- Per-project paths (Office) ---
+(defvar hcv-co-config-list nil
+  "Current option list for Office, populated by `hcv-configure'.")
+(defvar hcv-co-config-status nil
+  "Path to the `config.status' script in Office's build directory.")
+(defvar hcv-co-configure-file "autogen.sh"
+  "Script to run from the source tree to configure Office.")
+(defvar hcv-co-project-name "Collabora Office Configure"
+  "Display name for the Office configure UI.")
+(defvar hcv-co-config-buffer (format "*%s*" hcv-co-project-name)
+  "Buffer name for the Office configure UI.")
+(defvar hcv-co-configure-ac "engine/configure.ac")
+(defvar hcv-co-config-default-ac "~/co-config.default")
+(defvar hcv-co-default-build-dir)
+
+;; --- Shared ---
+(defvar hcv-env-variables '("CXXFLAGS")
+  "Environment variables to expose as editable fields in the configure UI.")
+(defvar hcv--options-obarray (obarray-make)
+  "Private obarray for configure option symbols, to avoid polluting the global obarray.")
 
 (defun hcv-read-configure-option (configure-string configure-description)
+  "Parse CONFIGURE-STRING and return a symbol describing the option.
+CONFIGURE-STRING looks like \"--enable-foo\" or \"--with-bar=VALUE\".
+CONFIGURE-DESCRIPTION is stored as a property for later display.
+The returned symbol is interned in `hcv--options-obarray' and carries the
+properties `configure-string', `configure-description', `widget-type', and
+\(for valued options\) `format'."
   (let* ((list-string (split-string configure-string "="))
-	 (configure-symbol (intern (nth 0 list-string))))
+         (option-name (nth 0 list-string))
+         (configure-symbol (intern option-name hcv--options-obarray)))
     (set configure-symbol nil)
     (put configure-symbol 'configure-string configure-string)
     (put configure-symbol 'configure-description configure-description)
-    (if (> (length list-string) 1)
-	(progn
-	  (set configure-symbol "")
-	  (put configure-symbol 'format (concat (symbol-name configure-symbol) "=%v"))
-	  (cond ((string-match "path" configure-string)
-		 (if (string-match "file" configure-string)
-		     (put configure-symbol 'widget-type 'file)
-		   (put configure-symbol 'widget-type 'directory)))
-		(t (put configure-symbol 'widget-type 'editable-field))))
+    (cond
+     ((= (length list-string) 1)
       (put configure-symbol 'widget-type 'checkbox))
+     (t
+      (set configure-symbol "")
+      (put configure-symbol 'format (concat option-name "=%v"))
+      (put configure-symbol 'widget-type
+           (cond
+            ((string-match-p "file" configure-string) 'file)
+            ((string-match-p "\\(path\\|dir\\|prefix\\)" configure-string) 'directory)
+            (t 'editable-field)))))
     configure-symbol))
 
-(defun hcv-read-configure-options (configure)
+(defun hcv-read-configure-options (configure-ac-file)
+  "Return the list of option symbols parsed from CONFIGURE-AC-FILE.
+CONFIGURE-AC-FILE must be a path to a `configure.ac' or equivalent M4
+source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
+`AS_HELP_STRING'.  Each returned element is a symbol interned in
+`hcv--options-obarray'.  Returns nil if the file does not exist."
   (let ((config-list nil)
-	(case-fold-search nil))
-    (if (file-exists-p configure)
-	(with-temp-buffer
-	  (insert-file-contents configure)
-	  (goto-char (point-max))
-	  (while (re-search-backward
-		  "\\(_ARG_ENABLE\\|_ARG_WITH\\)[^A]*AS_HELP_STRING[^[]*\\[\\([^]]*\\)[^[]*\\[\\([^]]*\\)"
-		  nil t)
-	    (push (hcv-read-configure-option (match-string 2) (match-string 3)) config-list))))
+        (case-fold-search nil))
+    (if (file-exists-p configure-ac-file)
+        (with-temp-buffer
+          (insert-file-contents configure-ac-file)
+          (goto-char (point-max))
+          (while (re-search-backward
+                  "\\(_ARG_ENABLE\\|_ARG_WITH\\)[^A]*AS_HELP_STRING[^[]*\\[\\([^]]*\\)[^[]*\\[\\([^]]*\\)"
+                  nil t)
+            (push (hcv-read-configure-option (match-string 2) (match-string 3))
+                  config-list)))
+      (message "hcv: configure.ac file not found: %s" configure-ac-file))
     config-list))
 
 (defun hcv-read-default-environment (config-list)
-  (setq CXXFLAGS "\"\"")
-  (put 'CXXFLAGS 'widget-type 'editable-field)
-  (put 'CXXFLAGS 'format (concat (symbol-name 'CXXFLAGS) "=%v"))
-  (put 'CXXFLAGS 'tag 'env-variable)
-  (push 'CXXFLAGS config-list)
-  config-list)
+  "Prepend env-variable entries to CONFIG-LIST and return it.
+Each name in `hcv-env-variables' is interned in `hcv--options-obarray'
+and gets its initial value from the current environment (or empty)."
+  (dolist (name hcv-env-variables config-list)
+    (let ((sym (intern name hcv--options-obarray)))
+      (set sym (or (getenv name) ""))
+      (put sym 'widget-type 'editable-field)
+      (put sym 'format (concat name "=%v"))
+      (put sym 'tag 'env-variable)
+      (push sym config-list))))
 
 (defun hcv-read-config-status (config-status)
-  (let ((config-list nil)
-	(list-string nil)
-	(config-symbol nil)
-	(config-value nil)
-	(config-list-size nil))
-    (if (file-exists-p config-status)
-	(progn (setq config-list (shell-command-to-string (concat config-status " --config")))
-	       (setq config-list (replace-regexp-in-string "'" "\"" config-list))
-	       (setq config-list (concat "(" config-list ")"))
-	       (setq config-list (read-from-string config-list))
-	       (setq config-list (car config-list)))
-      (setq config-list nil))
-    (setq config-list-size (length config-list))
-    (while config-list
-      (setq list-item (car config-list))
-      (setq list-string (split-string (if (symbolp list-item) (symbol-name list-item) list-item) "="))
-      (setq config-symbol (intern (nth 0 list-string)))
-      (setq config-value (nth 1 list-string))
-      (if (> (length list-string) 1)
-	  (if (eq (get config-symbol 'tag) 'env-variable)
-	      (set config-symbol (concat "\"" config-value "\""))
-	    (set config-symbol config-value))
-	(set config-symbol t))
-      (setq config-list (cdr config-list)))
-    (> config-list-size 0)))
+  "Read values from CONFIG-STATUS and update their symbols in `hcv--options-obarray'.
+CONFIG-STATUS must be a path to an executable `config.status' script
+\(typically produced by a previous `configure' run\).  Runs it with
+`--config' and parses the quoted argument list.
+
+For each `NAME=VALUE' entry, finds the matching symbol in
+`hcv--options-obarray' and sets its value.  Options without a `=' (flags
+like `--enable-foo') are set to t.
+
+Returns non-nil if at least one option was read, nil otherwise."
+  (let (config-list list-item list-string config-symbol config-value)
+    (when (file-exists-p config-status)
+      (let ((raw (shell-command-to-string (concat config-status " --config"))))
+        (setq config-list
+              (condition-case err
+                  (split-string-and-unquote raw)
+                (error
+                 (message "hcv: failed to parse config.status output: %s"
+                          (error-message-string err))
+                 nil)))))
+    (let ((had-items (> (length config-list) 0)))
+      (while config-list
+        (setq list-item (pop config-list))
+        (setq list-string (split-string list-item "="))
+        (setq config-symbol (intern (nth 0 list-string) hcv--options-obarray))
+        (setq config-value (nth 1 list-string))
+	(if config-value
+	    (set config-symbol config-value)
+	  (set config-symbol t)))
+      had-items)))
+
+(defun hcv--unquote-value (value)
+  "Strip surrounding double quotes from VALUE if present."
+  (if (and (>= (length value) 2)
+           (string-prefix-p "\"" value)
+           (string-suffix-p "\"" value))
+      (substring value 1 -1)
+    value))
 
 (defun hcv-read-config-default (configure-default)
-  (let ((config-list nil)
-	(list-string nil)
-	(config-symbol nil)
-	(config-value nil)
-	(config-string nil)
-	(pos))
+  "Read default option values from CONFIGURE-DEFAULT and apply them.
+..."
+  (let (lines had-items config-string pos config-symbol config-value)
     (if (file-exists-p configure-default)
-	(progn (setq config-list (with-temp-buffer (insert-file-contents configure-default)
-						   (buffer-string)))
-	       (setq config-list (split-string config-list "\n"))))
-    (while config-list
-      (setq config-string (car config-list))
-      (setq list-string (split-string config-string "="))
-      (if (> (length list-string) 2)
-	  (progn (setq pos (string-match "=" config-string))
-		 (push (substring config-string (1+ pos)) list-string)
-		 (push (substring config-string 0 pos) list-string)))
-      (setq config-symbol (intern (nth 0 list-string)))
-      (setq config-value (nth 1 list-string))
-      (if (> (length list-string) 1)
-	  (set config-symbol config-value)
-	(set config-symbol t))
-      (setq config-list (cdr config-list)))
-     (> (length config-list) 0)))
+        (let ((raw (with-temp-buffer
+                     (insert-file-contents configure-default)
+                     (buffer-string))))
+          (setq lines
+                (seq-filter (lambda (line)
+                              (let ((trimmed (string-trim line)))
+                                (and (not (string-empty-p trimmed))
+                                     (not (string-prefix-p "#" trimmed)))))
+                            (split-string raw "\n"))))
+      (message "hcv: default config file not found: %s" configure-default))
 
-(setq hcv-run-command "")
-(cond ((string-match-p hcv-cool-workspace-dir (expand-file-name command-line-default-directory))
-       (setq hcv-cool-build-dir
-	     (concat hcv-cool-build-dir
-		     (substring (expand-file-name command-line-default-directory)
-				(length hcv-cool-workspace-dir))))
-       (setq hcv-default-build-dir hcv-cool-build-dir)
-       (setq hcv-config-status (concat hcv-default-build-dir "config.status"))
-       (setq hcv-configure "configure")
-       (setq hcv-config-buffer "*Collabora Online Configure*")
-       (put 'hcv-config-buffer 'widget-title "Collabora Online Configure.\n\n")
-       (setq hcv-config-list (hcv-read-configure-options hcv-configure-ac))
-       (setq hcv-config-list (hcv-read-default-environment hcv-config-list))
-       (if (not (hcv-read-config-status hcv-config-status))
-	   (hcv-read-config-default hcv-config-default))
-       (setq compile-command (concat "make -j " hcv-num-cores " -C " hcv-cool-build-dir))
-       (setq tags-table-list (list (concat hcv-default-build-dir "TAGS")
-				   (concat hcv-default-build-dir "browser/TAGS")))
-       (setq hcv-run-command (concat "cd " hcv-default-build-dir " && make run"))
-       (setq hcv-head-config (concat "cd " hcv-default-build-dir " && head config.log"))
-       (if (not (file-exists-p hcv-configure))
-	   (async-shell-command "./autogen.sh")))
-      ((string-match-p hcv-lo-workspace-dir (expand-file-name command-line-default-directory))
-       (setq hcv-lo-build-dir
-	     (concat hcv-lo-build-dir
-		     (substring (expand-file-name command-line-default-directory)
-				(length hcv-lo-workspace-dir))))
-       (setq hcv-default-build-dir hcv-lo-build-dir)
-       (setq hcv-config-status (concat hcv-default-build-dir "config.status"))
-       (setq hcv-configure "autogen.sh")
-       (setq hcv-config-buffer "*LibreOffice Configure*")
-       (put 'hcv-config-buffer 'widget-title "LibreOffice Configure.\n\n")
-       (setq hcv-config-list (hcv-read-configure-options hcv-configure-ac))
-       (hcv-read-default-environment hcv-config-list)
-       (if (not (hcv-read-config-status hcv-config-status))
-	   (hcv-read-config-default hcv-config-default))
-       (setq compile-command (concat "make -C " hcv-default-build-dir " build-nocheck"))
-       (setq tags-file-name (concat hcv-default-build-dir "TAGS"))
-       (setq hcv-run-command (concat "cd " hcv-default-build-dir " && instdir/program/soffice.bin --norestore --nologo --writer"))
-       (setq hcv-head-config (concat "cd " hcv-default-build-dir " && head config.log"))))
+    (setq had-items (> (length lines) 0))
 
-(push hcv-run-command shell-command-history)
+    (dolist (config-string lines)
+      (setq pos (string-match "=" config-string))
+      (if pos
+          (setq config-symbol (intern (substring config-string 0 pos)
+                                      hcv--options-obarray)
+                config-value  (hcv--unquote-value
+                               (substring config-string (1+ pos))))
+        (setq config-symbol (intern config-string hcv--options-obarray)
+              config-value  nil))
+      (if config-value
+          (set config-symbol config-value)
+        (set config-symbol t)))
 
-(defun hcv-create-tags ()
-    (interactive)
-    (compile (concat "make -C " hcv-default-build-dir " tags")))
+    had-items))
+
+(when (string-match-p hcv-cool-workspace-dir
+                      (expand-file-name command-line-default-directory))
+
+  ;; --- Build paths ---
+  (setq hcv-cool-build-dir
+        (concat hcv-cool-build-dir
+                (substring (expand-file-name command-line-default-directory)
+                           (length hcv-cool-workspace-dir))))
+  (setq hcv-cool-default-build-dir hcv-cool-build-dir)
+  (setq hcv-co-default-build-dir (concat hcv-cool-default-build-dir "engine/"))
+  (setq hcv-cool-config-status (concat hcv-cool-default-build-dir "config.status"))
+  (setq hcv-co-config-status (concat hcv-co-default-build-dir "config.status"))
+
+  ;; --- COOL config ---
+  (setq hcv-cool-config-list (hcv-read-configure-options hcv-cool-configure-ac))
+  (setq hcv-cool-config-list (hcv-read-default-environment hcv-cool-config-list))
+  (unless (hcv-read-config-status hcv-cool-config-status)
+    (hcv-read-config-default hcv-cool-config-default-ac))
+
+  ;; --- Office config (same workspace, separate source tree) ---
+  (setq hcv-co-config-list (hcv-read-configure-options hcv-co-configure-ac))
+  (setq hcv-co-config-list (hcv-read-default-environment hcv-co-config-list))
+  (unless (hcv-read-config-status hcv-co-config-status)
+    (hcv-read-config-default hcv-co-config-default-ac))
+
+  ;; --- Default compile command and TAGS (unused by the transient but
+  ;;     handy when invoking `M-x compile' or `M-.' outside the menu) ---
+  (setq compile-command (concat "make -j " hcv-num-cores " -C " hcv-cool-build-dir))
+
+  ;; --- Bootstrap autogen if the configure script is missing ---
+  (if (not (file-exists-p (expand-file-name hcv-cool-configure-file
+                                            (expand-file-name command-line-default-directory))))
+      (async-shell-command "./autogen.sh"))
+
+  (global-set-key "\C-cc" 'hcv-main-commands))
 
 (eval-when-compile
   (require 'wid-edit))
 
-(defun hcv-config-list-update ()
-  (setq hcv-config-list nil)
-  (setq hcv-config-list (hcv-read-configure-options hcv-configure-ac))
-  (setq hcv-config-list (hcv-read-default-environment hcv-config-list))
-  (if (not (hcv-read-config-status hcv-config-status))
-      (hcv-read-config-default hcv-config-default)))
+(defun hcv-config-list-update (configure-ac configure-status configure-default-ac)
+  "Build and return a fresh config list from CONFIGURE-AC.
+Apply values from CONFIGURE-STATUS if available; otherwise fall back to
+CONFIGURE-DEFAULT-AC."
+  (let ((config-list (hcv-read-default-environment
+                      (hcv-read-configure-options configure-ac))))
+    (unless (hcv-read-config-status configure-status)
+      (hcv-read-config-default configure-default-ac))
+    config-list))
 
-(defun hcv-configure ()
-  (interactive)
-  (switch-to-buffer hcv-config-buffer)
+(defun hcv-configure (config-list-var configure-buffer configure-title
+                                      configure-ac configure-status configure-default-ac
+                                      source-dir build-dir configure-file)
+  "Render the configure buffer for CONFIGURE-BUFFER.
+CONFIG-LIST-VAR is the symbol of the global variable holding the option
+list for this project.  CONFIGURE-BUFFER is the name of the buffer to
+display.  CONFIGURE-TITLE is inserted at the top as a header.
+CONFIGURE-AC, CONFIGURE-STATUS and CONFIGURE-DEFAULT-AC are the inputs
+used to refresh the list.  SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE are
+passed to the execute/copy buttons."
+  (switch-to-buffer configure-buffer)
   (kill-all-local-variables)
   (let ((inhibit-read-only t))
     (erase-buffer))
   (remove-overlays)
-  (widget-insert (get 'hcv-config-buffer 'widget-title))
-  (hcv-config-list-update)
-  (let ((config-list hcv-config-list)
-	(config)
-	(type))
-    (while config-list
-      (setq config (car config-list))
-      (setq type (get config 'widget-type))
-      (if (eq type 'checkbox)
-	  (progn (put config 'widget (widget-create 'checkbox
-						    :button-suffix (symbol-name config)
-						    (symbol-value config)))
-		 (widget-insert "\n")))
-      (if (eq type 'editable-field)
-	  (progn (put config 'widget (widget-create 'editable-field
-						    :format (get config 'format)
-						    (symbol-value config)))))
-      (if (eq type 'directory)
-	  (progn (put config 'widget (widget-create 'directory
-						    :format (get config 'format)
-						    (symbol-value config)))))
-      (if (eq type 'file)
-	  (progn (put config 'widget (widget-create 'file
-						    :format (get config 'format)
-						    (symbol-value config)))))
-      (setq config-list (cdr config-list))))
+  (widget-insert configure-title)
+
+  (set config-list-var
+       (hcv-config-list-update configure-ac configure-status configure-default-ac))
+
+  (dolist (config (symbol-value config-list-var))
+    (let* ((type (get config 'widget-type))
+           (value (symbol-value config))
+           (widget
+            (cond
+             ((eq type 'checkbox)
+              (widget-create 'checkbox
+                             :button-suffix (symbol-name config)
+                             value))
+             ((memq type '(editable-field directory file))
+              (widget-create type
+                             :format (get config 'format)
+                             value)))))
+      (put config 'widget widget)
+      (when (eq type 'checkbox)
+        (widget-insert "\n"))))
+
+  ;; Closures capture config-list-var, source-dir, build-dir, configure-file.
   (widget-create 'push-button
-		 :notify 'hcv-execute-configure
-		 "Configure")
+                 :notify (lambda (&rest _)
+                           (hcv-execute-configure config-list-var source-dir build-dir configure-file))
+                 "Configure")
   (widget-insert " ")
   (widget-create 'push-button
-		 :notify 'hcv-execute-copy-clipboard
-		 "Copy")
+                 :notify (lambda (&rest _)
+                           (hcv-execute-copy-clipboard config-list-var source-dir build-dir configure-file))
+                 "Copy")
   (use-local-map widget-keymap)
   (widget-setup))
 
-(defun hcv-get-shell-command (config-list)
-  (let ((config)
-	(type)
-	(widget)
-	(value)
-	(out-list)
-	(cmd))
-    (while config-list
-      (setq config (car config-list))
-      (setq widget (get config 'widget))
-      (setq type (get config 'widget-type))
-      (setq value (widget-value widget))
-      (if (and (eq type 'checkbox) value)
-	  (push (symbol-name config) out-list))
-      (if (and (eq type 'editable-field) (not (string= value "")))
-	  (push (concat (symbol-name config) "=" value) out-list))
-      (if (and (eq type 'directory) (not (string= value "")))
-	  (push (concat (symbol-name config) "=" value) out-list))
-      (if (and (eq type 'file) (not (string= value "")))
-	  (push (concat (symbol-name config) "=" value) out-list))
-      (setq config-list (cdr config-list)))
-    (setq cmd (concat "cd " hcv-default-build-dir
-		      " && " command-line-default-directory hcv-configure
-		      " " (mapconcat #'identity out-list " ")))))
+(defun hcv-get-shell-command (config-list source-dir build-dir configure-file)
+  "Build a shell command string to run CONFIGURE-FILE with CONFIG-LIST.
+Intended for display and copy-paste into a shell, not for direct
+execution.
 
-(defun hcv-execute-configure (&rest ignore)
-  (let ((cmd (hcv-get-shell-command hcv-config-list)))
-    (gnus-make-directory hcv-default-build-dir)
+CONFIG-LIST is a list of option symbols (from `hcv--options-obarray'),
+each carrying a `widget' property with its current widget.  For each
+option, emits `--name' for checked checkboxes and `NAME=VALUE' for
+non-empty text/file/directory fields.  Values are shell-quoted.
+
+BUILD-DIR is the directory the command should `cd' into before running
+the script.  SOURCE-DIR is the directory containing CONFIGURE-FILE.
+CONFIGURE-FILE is the relative filename of the configure script to
+invoke."
+  (let (out-list)
+    (dolist (config config-list)
+      (let* ((widget (get config 'widget))
+             (type   (get config 'widget-type))
+             (value  (widget-value widget)))
+        (cond
+         ((and (eq type 'checkbox) value)
+          (push (symbol-name config) out-list))
+         ((and (memq type '(editable-field directory file))
+               (not (string-empty-p value)))
+          (push (concat (symbol-name config) "=" (shell-quote-argument value))
+                out-list)))))
+    (concat "cd " (shell-quote-argument build-dir)
+            " && "
+            (shell-quote-argument
+             (expand-file-name configure-file source-dir))
+            " "
+            (mapconcat #'identity (nreverse out-list) " "))))
+
+(defun hcv-execute-configure (config-list-var source-dir build-dir configure-file)
+  "Run the configure command for the project identified by CONFIG-LIST-VAR.
+Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
+  (let ((cmd (hcv-get-shell-command (symbol-value config-list-var)
+                                    source-dir build-dir configure-file)))
+    (make-directory build-dir t)
     (async-shell-command cmd)))
 
-(defun hcv-execute-copy-clipboard (&rest ignore)
-  (let ((cmd (hcv-get-shell-command hcv-config-list)))
+(defun hcv-execute-copy-clipboard (config-list-var source-dir build-dir configure-file)
+  "Copy the configure command for the project identified by CONFIG-LIST-VAR.
+Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
+  (let ((cmd (hcv-get-shell-command (symbol-value config-list-var)
+                                    source-dir build-dir configure-file)))
     (xclip-set-selection 'clipboard cmd)))
 
-;(setf (cdr (assoc '(java-mode java-ts-mode) eglot-server-programs))
-;      (list "jdtls" (concat "-configuration " (expand-file-name user-emacs-directory) ".jdtls")
-;	    (concat "-data " (expand-file-name user-emacs-directory) ".jdtls")))
+(defun hcv-configure-cool ()
+  "Open the Collabora Online configure buffer."
+  (interactive)
+  (hcv-configure 'hcv-cool-config-list
+                 hcv-cool-config-buffer
+                 (concat hcv-cool-project-name ".\n\n")
+                 hcv-cool-configure-ac
+                 hcv-cool-config-status
+                 hcv-cool-config-default-ac
+                 (expand-file-name command-line-default-directory)
+                 hcv-cool-default-build-dir
+                 hcv-cool-configure-file))
 
-;; (setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
-;;       (list "ccls" (concat "--init={\"compilationDatabaseDirectory\":  \"" hcv-default-build-dir "\", "
-;; 			   "\"cache\": {\"directory\": \"" hcv-default-build-dir "\"}, "
-;; 			   "\"index\": {\"threads\" : " hcv-num-cores "}}")))
+(defun hcv-configure-co ()
+  "Open the Collabora Office configure buffer."
+  (interactive)
+  (hcv-configure 'hcv-co-config-list
+                 hcv-co-config-buffer
+                 (concat hcv-co-project-name ".\n\n")
+                 hcv-co-configure-ac
+                 hcv-co-config-status
+                 hcv-co-config-default-ac
+		 (expand-file-name "engine/" command-line-default-directory)
+                 hcv-co-default-build-dir
+                 hcv-co-configure-file))
 
-;;(setf (cdr (assoc '(c-mode c-ts-mode c++-mode c++-ts-mode) eglot-server-programs))
-;;      (list "clangd" :initializationOptions `(:compilationDatabasePath ,hcv-default-build-dir)))
+(defun hcv-compile-cool ()
+  "Run make for COOL."
+  (interactive)
+  (let ((compile-command (concat "make -j " hcv-num-cores " -C " hcv-cool-default-build-dir)))
+    (call-interactively 'compile)))
 
+(defun hcv-compile-co ()
+  "Run make for Office."
+  (interactive)
+  (let ((compile-command (concat "make -C " hcv-co-default-build-dir)))
+    (call-interactively 'compile)))
 
-;; (setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
-;;      (list "typescript-language-server" "--stdio" "--log-level" "4" "--tsserver-log-verbosity" "verbose" :initializationOptions
-;; 	    `(tsserver: (logVerbosity: "verbose" logDirectory: ,hcv-default-build-dir))))
-;; (setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
-;;      (list "typescript-language-server" "--stdio" :initializationOptions
-;; 	    `(:tsserver (:logVerbosity "verbose" :logDirectory ,hcv-default-build-dir))))
-;; :useSyntaxServer "never"
+(defun hcv-run-cool ()
+  "Run the configured run command for COOL."
+  (interactive)
+  (let* ((default-cmd (concat "cd " hcv-cool-default-build-dir " && make run"))
+         (cmd (read-shell-command "Run command: " default-cmd)))
+    (async-shell-command cmd)))
 
-;;(setf (cdr (assoc '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode) eglot-server-programs))
-;;      (list "deno" "lsp" :initializationOptions `(:enable t :lint t)))
+(defun hcv-run-co ()
+  "Run the configured run command for Office."
+  (interactive)
+  (let* ((default-cmd (concat "cd " hcv-co-default-build-dir " && make run"))
+         (cmd (read-shell-command "Run command: " default-cmd)))
+    (async-shell-command cmd)))
 
+(defun hcv-head-config-cool ()
+  "Show head of config.log for COOL."
+  (interactive)
+  (async-shell-command (concat "cd " hcv-cool-default-build-dir " && head config.log")))
 
-(global-set-key "\C-cc" 'hcv-main-commands)
+(defun hcv-head-config-co ()
+  "Show head of config.log for Office."
+  (interactive)
+  (async-shell-command (concat "cd " hcv-co-default-build-dir " && head config.log")))
+
+(defun hcv-tags-build-cool ()
+  "Regenerate TAGS for COOL by running `make tags' in its build dir."
+  (interactive)
+  (compile (concat "make -C " hcv-cool-default-build-dir " tags")))
+
+(defun hcv-tags-build-co ()
+  "Regenerate TAGS for Office by running `make tags' in its build dir."
+  (interactive)
+  (compile (concat "make -C " hcv-co-default-build-dir " tags")))
+
+(defun hcv-tags-load-cool ()
+  "Set `tags-table-list' to COOL's TAGS files."
+  (interactive)
+  (setq tags-table-list (list (concat hcv-cool-default-build-dir "TAGS")
+                              (concat hcv-cool-default-build-dir "browser/TAGS")))
+  (message "Tags table list switched to COOL"))
+
+(defun hcv-tags-load-co ()
+  "Set `tags-table-list' to Office's TAGS files."
+  (interactive)
+  (setq tags-table-list (list (concat hcv-co-default-build-dir "TAGS")))
+  (message "Tags table list switched to Office"))
+
 (transient-define-prefix hcv-main-commands ()
-			 "Main Commands."
-			 ["Commands: "
-			  ("o" "*Open Recent*" recentf-open-files)
-			  ("b" "*Buffer List*" list-buffers)
-			  ("k" "*Bookmark List*" bookmark-bmenu-list)
-			  ("g" "*Register List*" list-registers)
-			  ("f" "" hcv-configure :description ,hcv-config-buffer)
-			  ("s" "Select Yank" (lambda () (interactive) (redisplay) (popup-menu 'yank-menu)))
-			  ("c" "Compile Command" compile)
-			  ("r" "Run Command" (lambda(command)
-					       (interactive (list (read-shell-command
-								   "Run command: "
-								   hcv-run-command)))
-					       (async-shell-command command)))
-			  ("l" "Config Log" (lambda() (interactive) (async-shell-command hcv-head-config)))])
+  "Main Commands."
+  ["Buffers & Navigation"
+   ("b" "Buffer List"    list-buffers)
+   ("r" "Recent Files"   recentf-open-files)
+   ("m" "Bookmarks"      bookmark-bmenu-list)
+   ("g" "Registers"      list-registers)
+   ("y" "Yank Menu"      (lambda () (interactive) (redisplay) (popup-menu 'yank-menu)))]
+  ["Projects"
+   ("o" "Collabora Online…"  hcv-cool-commands)
+   ("w" "Collabora Office…"   hcv-co-commands)])
+
+(transient-define-prefix hcv-cool-commands ()
+  "Collabora Online commands."
+  [:description (lambda () (format "%s" hcv-cool-project-name))
+   ("c" "Configure…"   hcv-configure-cool)
+   ("m" "Make"         hcv-compile-cool)
+   ("r" "Run"          hcv-run-cool)
+   ("L" "Log (head)"   hcv-head-config-cool)
+   ("t" "Tags: build"  hcv-tags-build-cool)
+   ("T" "Tags: load"   hcv-tags-load-cool)])
+
+(transient-define-prefix hcv-co-commands ()
+  "Collabora Office commands."
+  [:description (lambda () (format "%s" hcv-co-project-name))
+   ("c" "Configure…"   hcv-configure-co)
+   ("m" "Make"         hcv-compile-co)
+   ("r" "Run"          hcv-run-co)
+   ("L" "Log (head)"   hcv-head-config-co)
+   ("t" "Tags: build"  hcv-tags-build-co)
+   ("T" "Tags: load"   hcv-tags-load-co)])
+
