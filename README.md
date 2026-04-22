@@ -1,78 +1,193 @@
-# .emacs.d
-My Emacs configuration to develop Collabora Online
+# Collabora Configure UI
 
-Hi, This is my emacs settings of the Collabora Online development.
-I run a text terminal (gnome-terminal with TrueColor feature)
-for coding and I do not like my workspace folder be contaminated with
-the generated build output.
+An Emacs Lisp configuration file that provides a widget-based UI for configuring
+two related projects: **Collabora Online (COOL)** and **Collabora Office (CO)**.
+The UI parses `configure.ac`, reads `config.status` for current values, and
+generates the `./configure` or `./autogen.sh` command to run.
 
-Assign values to your preference workspace folders:
-```elisp
-;; Collabora Online workspace directory
-(setq hcv-cool-workspace-dir "/path/to/your/cool/workspace/"))
+## Recommended workspace layout
 
-;; Collabora Online output build directory
-(setq hcv-cool-build-dir "/path/to/your/cool/build/"))
+Use `git worktree` to keep each workspace isolated. This lets you have several
+branches checked out simultaneously without cloning the repo multiple times,
+and each worktree becomes its own independent workspace that the UI can target.
 
-;; Libre Office workspace directory
-(setq hcv-lo-workspace-dir "/path/to/your/lo/worspace/"))
+Typical setup:
 
-;; Libre Office output build directory
-(setq hcv-lo-build-dir "/path/to/your/lo/build/"))
+```
+~/develop/online/
+  main/        ← git worktree: master branch
+  bin/         ← git worktree: working branch (active)
+  fix-123/     ← git worktree: bugfix branch
 ```
 
-Check out a local branch to your workspace folder:
-```bash
-~$ git worktree add /path/to/your/cool/workspace/your-cool-branch your-cool-branch
+Create additional worktrees with:
 
-~$ git worktree add /path/to/your/lo/workspace/your-lo-branch your-lo-branch
-
-~$ cd /path/to/your/cool/workspace/test
-
-~$ emacs
+```sh
+cd ~/develop/online/main
+git worktree add ../bin <branch-name>
 ```
 
-Run configure command
+**Build output is out of tree.** The UI assumes builds go under `~/build/...`,
+mirroring the workspace name under `~/develop/...`:
+
 ```
-‘M-x hcv-configure’
+~/develop/online/bin/    ← source (git worktree)
+~/build/online/bin/      ← build output (COOL)
+~/build/online/bin/engine/  ← build output (Collabora Office)
 ```
 
-Edit your config parameters into interactive custom buffer
-"*Collabora Online Configure*"
+Advantages of keeping builds out of tree:
 
-Push the button "Configure"
+- `git status` stays clean — no generated files cluttering the worktree.
+- You can nuke `~/build/online/bin/` and start fresh without touching source.
+- Multiple worktrees can each have their own build dir without collisions.
+- Switching branches doesn't invalidate unrelated build artifacts.
 
-(Optional) You can define your default config values
-in a file.
-```elisp
-(setq hcv-config-default "~/config.default")
+The variables `hcv-cool-workspace-dir` and the derived build paths encode this
+layout. If you deviate from it, adjust the defvars at the top of `config.el`.
+
+## Architecture
+
+### Two parallel project setups
+
+Each project has its own set of variables, mirroring each other:
+
+| Concept            | COOL                           | Collabora Office                 |
+| ------------------ | ------------------------------ | -------------------------------- |
+| Project name       | `hcv-cool-project-name`        | `hcv-co-project-name`            |
+| Workspace dir      | `hcv-cool-workspace-dir`       | (derived, under COOL + `engine/`) |
+| Build dir          | `hcv-cool-default-build-dir`   | `hcv-co-default-build-dir`       |
+| configure.ac path  | `hcv-cool-configure-ac`        | `hcv-co-configure-ac`            |
+| Default options    | `hcv-cool-config-default-ac`   | `hcv-co-config-default-ac`       |
+| config.status path | `hcv-cool-config-status`       | `hcv-co-config-status`           |
+| Configure script   | `hcv-cool-configure-file`      | `hcv-co-configure-file`          |
+| Option list        | `hcv-cool-config-list`         | `hcv-co-config-list`             |
+| Config buffer name | `hcv-cool-config-buffer`       | `hcv-co-config-buffer`           |
+
+COOL uses `./configure`; Office uses `./autogen.sh`. Office lives in the
+`engine/` subdirectory inside the COOL workspace, and its build dir is derived
+from COOL's: `<cool-build>/engine/`.
+
+### Transient menu structure
+
+Entry point: `C-c c` → `hcv-main-commands`.
+
+```
+C-c c
+  Buffers & Navigation
+    b — Buffer List
+    r — Recent Files
+    m — Bookmarks
+    g — Registers
+    y — Yank Menu
+  Projects
+    o — Collabora Online…
+    w — Collabora Office…
 ```
 
-For example, I like to build Libre Office:
+Each project submenu is identical in shape:
+
 ```
---with-doxygen=no
---with-external-tar=/path/to/external-tar
+  c — Configure…      (hcv-configure-<proj>)
+  m — Make            (hcv-compile-<proj>)
+  r — Run             (hcv-run-<proj>)
+  L — Log (head)      (hcv-head-config-<proj>)
+  t — Tags: build     (hcv-tags-build-<proj>)
+  T — Tags: load      (hcv-tags-load-<proj>)
 ```
 
-Compile
+Keys are consistent across projects: `c` always configures, `m` always makes,
+etc. Lowercase for frequent actions, uppercase (`L`, `T`) for the less common.
+
+## Key flow summary
+
+At load time (if `command-line-default-directory` is inside COOL workspace):
+
+1. Build paths derived: `hcv-cool-default-build-dir`, `hcv-co-default-build-dir`.
+2. For each project: parse configure.ac, overlay env-vars, then try to read
+   `config.status`. If that fails, fall back to the defaults file.
+3. Emacs defaults set: `compile-command`, `tags-table-list` (COOL's).
+4. If `./configure` doesn't exist, run `autogen.sh` to create it.
+
+At interactive time:
+
+1. User presses `C-c c` → menu appears.
+2. User picks `o` (Online) or `w` (Writer/Office).
+3. User picks `c` (Configure) → widget buffer opens with current options.
+4. User ticks boxes, edits fields.
+5. User presses "Copy" button → command placed in clipboard to paste in shell.
+   Or "Configure" button → command runs via `async-shell-command`.
+
+## Files
+
+- `config.el` — the configuration itself.
+- `~/cool-config.default` — COOL option defaults.
+- `~/co-config.default` — Office option defaults.
+
+### Example `~/cool-config.default`
+
 ```
-‘M-x compile’ or C-c c
+CXXFLAGS="-g -O0 -Werror -Wno-error=deprecated-declarations"
+--enable-debug
+--enable-silent-rules
+--with-poco-includes=/opt/poco/include
+--with-poco-libs=/opt/poco/lib
+--with-lokit-path=/home/user/collaboraoffice/include
+--with-lo-path=/home/user/collaboraoffice/instdir
+--with-logfile=/tmp/coolwsd.log
 ```
 
-Run
+### Example `~/co-config.default`
+
 ```
-C-c x
+CXXFLAGS="-g -O0 -Werror -Wno-error=deprecated-declarations"
+--enable-dbgutil
+--enable-debug
+--enable-silent-rules
+--without-java
+--with-jdk-home=/usr/lib/jvm/default-java
+--with-external-tar=/home/user/lo-externals
+--without-help
+--without-myspell-dicts
 ```
 
-Stop process
-```
-‘M-x comint-interrupt-subjob’ or C-c C-c
-```
+Notes:
 
-Happy hacking
+- One option per line.
+- Blank lines and lines starting with `#` are ignored.
+- Values wrapped in double quotes (like `CXXFLAGS="..."`) get the surrounding
+  quotes stripped at read time — shell quoting is re-applied when the command
+  is built, so don't pre-escape.
+- These files are consulted only when `config.status` is absent. Once you run
+  `./configure`, subsequent widget openings read from `config.status` instead.
 
+## Keybindings quick reference
 
-TODO
-* Custom buffer to read Makefile targets
-* Custom variables
-* Package if it is useful
+| Key       | Action                       |
+| --------- | ---------------------------- |
+| `C-c c`   | Open main commands menu      |
+| `C-o`     | Open next line (vi-style)    |
+| `M-o`     | Open previous line (vi-style) |
+
+Inside `C-c c`:
+
+| Key       | Action                       |
+| --------- | ---------------------------- |
+| `b`       | Buffer List                  |
+| `r`       | Recent Files                 |
+| `m`       | Bookmarks                    |
+| `g`       | Registers                    |
+| `y`       | Yank Menu                    |
+| `o`       | Online submenu               |
+| `w`       | Writer / Office submenu      |
+
+Inside `o` or `w`:
+
+| Key       | Action                       |
+| --------- | ---------------------------- |
+| `c`       | Configure (widget buffer)    |
+| `m`       | Make                         |
+| `r`       | Run                          |
+| `L`       | Log (head of config.log)     |
+| `t`       | Tags: build (`make tags`)    |
+| `T`       | Tags: load (set tags-table-list) |
