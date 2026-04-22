@@ -554,6 +554,22 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   (interactive)
   (async-shell-command (concat "cd " hcv-co-default-build-dir " && head config.log")))
 
+(defun hcv-full-config-cool ()
+  "Open the full config.log for COOL in view-mode."
+  (interactive)
+  (let ((log (concat hcv-cool-default-build-dir "config.log")))
+    (if (file-exists-p log)
+        (view-file log)
+      (message "hcv: config.log not found: %s" log))))
+
+(defun hcv-full-config-co ()
+  "Open the full config.log for Office in view-mode."
+  (interactive)
+  (let ((log (concat hcv-co-default-build-dir "config.log")))
+    (if (file-exists-p log)
+        (view-file log)
+      (message "hcv: config.log not found: %s" log))))
+
 (defun hcv-tags-build-cool ()
   "Regenerate TAGS for COOL by running `make tags' in its build dir."
   (interactive)
@@ -596,6 +612,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
    ("m" "Make"         hcv-compile-cool)
    ("r" "Run"          hcv-run-cool)
    ("L" "Log (head)"   hcv-head-config-cool)
+   ("F" "Log (full)"   hcv-full-config-cool)
    ("t" "Tags: build"  hcv-tags-build-cool)
    ("T" "Tags: load"   hcv-tags-load-cool)])
 
@@ -606,6 +623,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
    ("m" "Make"         hcv-compile-co)
    ("r" "Run"          hcv-run-co)
    ("L" "Log (head)"   hcv-head-config-co)
+   ("F" "Log (full)"   hcv-full-config-co)
    ("t" "Tags: build"  hcv-tags-build-co)
    ("T" "Tags: load"   hcv-tags-load-co)])
 
