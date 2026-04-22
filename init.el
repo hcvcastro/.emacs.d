@@ -534,9 +534,11 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
     (async-shell-command cmd)))
 
 (defun hcv-run-co ()
-  "Run the configured run command for Office."
+  "Run Collabora Office (soffice.bin) from the build instdir."
   (interactive)
-  (let* ((default-cmd (concat "cd " hcv-co-default-build-dir " && make run"))
+  (let* ((default-cmd (concat hcv-co-default-build-dir
+                              "instdir/program/soffice.bin"
+                              " --norestore --nologo --writer"))
          (cmd (read-shell-command "Run command: " default-cmd)))
     (async-shell-command cmd)))
 
