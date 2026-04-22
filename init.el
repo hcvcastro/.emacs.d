@@ -630,6 +630,20 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   (setq tags-table-list (list (concat hcv-co-default-build-dir "TAGS")))
   (message "Tags table list switched to Office"))
 
+(defun hcv-clean-cool ()
+  "Run make clean for COOL."
+  (interactive)
+  (let ((cmd (concat "make -C " hcv-cool-default-build-dir " clean")))
+    (add-to-history 'compile-history cmd)
+    (compile cmd)))
+
+(defun hcv-clean-co ()
+  "Run make clean for Office."
+  (interactive)
+  (let ((cmd (concat "make -C " hcv-co-default-build-dir " clean")))
+    (add-to-history 'compile-history cmd)
+    (compile cmd)))
+
 (transient-define-prefix hcv-main-commands ()
   "Main Commands."
   ["Buffers & Navigation"
@@ -647,6 +661,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   [:description (lambda () (format "%s" hcv-cool-project-name))
    ("c" "Configure…"   hcv-configure-cool)
    ("m" "Make"         hcv-compile-cool)
+   ("k" "Clean"        hcv-clean-cool)
    ("r" "Run"          hcv-run-cool)
    ("L" "Log (head)"   hcv-head-config-cool)
    ("F" "Log (full)"   hcv-full-config-cool)
@@ -658,6 +673,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   [:description (lambda () (format "%s" hcv-co-project-name))
    ("c" "Configure…"   hcv-configure-co)
    ("m" "Make"         hcv-compile-co)
+   ("k" "Clean"        hcv-clean-co)
    ("r" "Run"          hcv-run-co)
    ("L" "Log (head)"   hcv-head-config-co)
    ("F" "Log (full)"   hcv-full-config-co)
