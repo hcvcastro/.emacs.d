@@ -644,6 +644,69 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
     (add-to-history 'compile-history cmd)
     (compile cmd)))
 
+(defun hcv--assert-build-preconditions (&optional fresh)
+  "Signal `user-error' if required files for a build-all are missing.
+When FRESH is non-nil, require defaults files even if config.status exists."
+  (let (missing)
+    (unless (file-exists-p hcv-cool-configure-ac)
+      (push (format "COOL configure.ac: %s" hcv-cool-configure-ac) missing))
+    (unless (file-exists-p hcv-co-configure-ac)
+      (push (format "Office configure.ac: %s" hcv-co-configure-ac) missing))
+    (when (or fresh
+              (not (file-exists-p hcv-cool-config-status)))
+      (unless (file-exists-p (expand-file-name hcv-cool-config-default-ac))
+        (push (format "COOL defaults: %s" hcv-cool-config-default-ac) missing)))
+    (when (or fresh
+              (not (file-exists-p hcv-co-config-status)))
+      (unless (file-exists-p (expand-file-name hcv-co-config-default-ac))
+        (push (format "Office defaults: %s" hcv-co-config-default-ac) missing)))
+    (when missing
+      (user-error "hcv-build-all: missing required files:\n  %s"
+                  (mapconcat #'identity (nreverse missing) "\n  ")))))
+
+(defun hcv-build-all (&optional fresh)
+  "Configure + make Office, then configure + make COOL.
+Configures a project only if its config.status is missing.
+
+With prefix arg FRESH, force-reload defaults from disk (ignoring
+config.status and any in-memory widget edits) and always regenerate
+configure for both projects."
+  (interactive "P")
+  (hcv--assert-build-preconditions fresh)
+  (when fresh
+    (setq hcv-cool-config-list
+          (hcv-read-default-environment
+           (hcv-read-configure-options hcv-cool-configure-ac)))
+    (hcv-read-config-default hcv-cool-config-default-ac)
+    (setq hcv-co-config-list
+          (hcv-read-default-environment
+           (hcv-read-configure-options hcv-co-configure-ac)))
+    (hcv-read-config-default hcv-co-config-default-ac))
+  (let (steps)
+    ;; Office first (COOL depends on Office's LOKit).
+    (when (or fresh (not (file-exists-p hcv-co-config-status)))
+      (push (hcv-get-shell-command
+             hcv-co-config-list
+             (expand-file-name "engine/" command-line-default-directory)
+             hcv-co-default-build-dir
+             hcv-co-configure-file)
+            steps))
+    (push (concat "make -j " hcv-num-cores " -C " hcv-co-default-build-dir) steps)
+    ;; Then COOL.
+    (when (or fresh (not (file-exists-p hcv-cool-config-status)))
+      (push (hcv-get-shell-command
+             hcv-cool-config-list
+             (expand-file-name command-line-default-directory)
+             hcv-cool-default-build-dir
+             hcv-cool-configure-file)
+            steps))
+    (push (concat "make -j " hcv-num-cores " -C " hcv-cool-default-build-dir) steps)
+    (make-directory hcv-co-default-build-dir t)
+    (make-directory hcv-cool-default-build-dir t)
+    (let ((cmd (mapconcat #'identity (nreverse steps) " && \\\n")))
+      (add-to-history 'compile-history cmd)
+      (compile cmd))))
+
 (transient-define-prefix hcv-main-commands ()
   "Main Commands."
   ["Buffers & Navigation"
@@ -653,8 +716,9 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
    ("g" "Registers"      list-registers)
    ("y" "Yank Menu"      (lambda () (interactive) (redisplay) (popup-menu 'yank-menu)))]
   ["Projects"
+   ("w" "Collabora Office…"  hcv-co-commands)
    ("o" "Collabora Online…"  hcv-cool-commands)
-   ("w" "Collabora Office…"   hcv-co-commands)])
+   ("a" "Build all"          hcv-build-all)])
 
 (transient-define-prefix hcv-cool-commands ()
   "Collabora Online commands."
