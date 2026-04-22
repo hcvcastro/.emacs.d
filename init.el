@@ -210,6 +210,38 @@
 (defvar hcv--options-obarray (obarray-make)
   "Private obarray for configure option symbols, to avoid polluting the global obarray.")
 
+(defun hcv--shell-split (string)
+  "Split STRING into shell-style tokens.
+Respects single and double quotes.  Does not handle escape sequences."
+  (let ((pos 0)
+        (len (length string))
+        (tokens '())
+        current)
+    (while (< pos len)
+      (let ((c (aref string pos)))
+        (cond
+         ((memq c '(?\s ?\t ?\n))
+          (when current (push current tokens) (setq current nil))
+          (setq pos (1+ pos)))
+         ((eq c ?\')
+          (let ((end (string-match "'" string (1+ pos))))
+            (unless end (error "hcv--shell-split: unterminated single quote"))
+            (setq current (concat (or current "")
+                                  (substring string (1+ pos) end))
+                  pos     (1+ end))))
+         ((eq c ?\")
+          (let ((end (string-match "\"" string (1+ pos))))
+            (unless end (error "hcv--shell-split: unterminated double quote"))
+            (setq current (concat (or current "")
+                                  (substring string (1+ pos) end))
+                  pos     (1+ end))))
+         (t
+          (setq current (concat (or current "") (char-to-string c))
+                pos     (1+ pos))))))
+    (when current (push current tokens))
+    (nreverse tokens)))
+
+
 (defun hcv-read-configure-option (configure-string configure-description)
   "Parse CONFIGURE-STRING and return a symbol describing the option.
 CONFIGURE-STRING looks like \"--enable-foo\" or \"--with-bar=VALUE\".
@@ -284,20 +316,25 @@ Returns non-nil if at least one option was read, nil otherwise."
       (let ((raw (shell-command-to-string (concat config-status " --config"))))
         (setq config-list
               (condition-case err
-                  (split-string-and-unquote raw)
+                  (hcv--shell-split raw)
                 (error
                  (message "hcv: failed to parse config.status output: %s"
                           (error-message-string err))
                  nil)))))
-    (let ((had-items (> (length config-list) 0)))
+    (let ((had-items (> (length config-list) 0))
+          pos)
       (while config-list
         (setq list-item (pop config-list))
-        (setq list-string (split-string list-item "="))
-        (setq config-symbol (intern (nth 0 list-string) hcv--options-obarray))
-        (setq config-value (nth 1 list-string))
-	(if config-value
-	    (set config-symbol config-value)
-	  (set config-symbol t)))
+        (setq pos (string-match "=" list-item))
+        (if pos
+            (setq config-symbol (intern (substring list-item 0 pos)
+                                        hcv--options-obarray)
+                  config-value  (substring list-item (1+ pos)))
+          (setq config-symbol (intern list-item hcv--options-obarray)
+                config-value  nil))
+        (if config-value
+            (set config-symbol config-value)
+          (set config-symbol t)))
       had-items)))
 
 (defun hcv--unquote-value (value)
