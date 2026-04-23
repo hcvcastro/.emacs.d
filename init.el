@@ -268,6 +268,17 @@ updated, so values set by `config.status' or the defaults file win."
                  (string-empty-p (symbol-value sym)))
         (set sym (funcall thunk))))))
 
+(defun hcv--insert-description (desc)
+  "Insert DESC as an indented, faded help-line under a widget."
+  (when (and desc (not (string-empty-p desc)))
+    (widget-insert "\n")
+    (let ((start (point)))
+      (widget-insert "    ")
+      ;; Collapse internal whitespace (the regex grabs newlines+indent from M4).
+      (widget-insert (replace-regexp-in-string "[ \t\n]+" " " (string-trim desc)))
+      (add-text-properties start (point) '(face shadow)))
+    (widget-insert "\n\n")))
+
 (defun hcv-read-configure-option (configure-string configure-description
                                                    &optional dual-form)
   "Parse CONFIGURE-STRING and return a symbol describing the option.
@@ -505,32 +516,32 @@ passed to the execute/copy buttons."
                                derived-defaults))
 
   (dolist (config (symbol-value config-list-var))
-  (let* ((type (get config 'widget-type))
-         (value (symbol-value config)))
-    (cond
-     ((eq type 'checkbox)
-      (let ((w (widget-create 'checkbox
-                              :button-suffix (symbol-name config)
-                              value)))
-        (put config 'widget w)
-        (widget-insert "\n")))
-     ((eq type 'toggle-field)
-      (let* ((enabled (and (consp value) (car value)))
-             (valstr  (if (consp value) (cdr value) ""))
-             (cb (widget-create 'checkbox
+    (let* ((type  (get config 'widget-type))
+           (value (symbol-value config))
+           (desc  (get config 'configure-description)))
+      (cond
+       ((eq type 'checkbox)
+        (let ((w (widget-create 'checkbox
                                 :button-suffix (symbol-name config)
-                                enabled))
-             (_  (widget-insert "="))
-             (fd (widget-create 'editable-field
-                                :size 30
-                                valstr)))
-        (put config 'widget (cons cb fd))
-        (widget-insert "\n")))
-     ((memq type '(editable-field directory file))
-      (let ((w (widget-create type
-                              :format (get config 'format)
-                              value)))
-        (put config 'widget w))))))
+                                value)))
+          (put config 'widget w)))
+       ((eq type 'toggle-field)
+        (let* ((enabled (and (consp value) (car value)))
+               (valstr  (if (consp value) (cdr value) ""))
+               (cb (widget-create 'checkbox
+                                  :button-suffix (symbol-name config)
+                                  enabled))
+               (_  (widget-insert "="))
+               (fd (widget-create 'editable-field
+                                  :size 30
+                                  valstr)))
+          (put config 'widget (cons cb fd))))
+       ((memq type '(editable-field directory file))
+        (let ((w (widget-create type
+                                :format (get config 'format)
+                                value)))
+          (put config 'widget w))))
+      (hcv--insert-description desc)))
 
   ;; Closures capture config-list-var, source-dir, build-dir, configure-file.
   (widget-create 'push-button
