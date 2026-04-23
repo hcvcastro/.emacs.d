@@ -269,15 +269,24 @@ updated, so values set by `config.status' or the defaults file win."
         (set sym (funcall thunk))))))
 
 (defun hcv--insert-description (desc)
-  "Insert DESC as an indented, faded help-line under a widget."
+  "Insert DESC as an indented, faded help block under a widget.
+Preserves newlines (renders as multiple lines) but collapses runs of
+horizontal whitespace.  Each line is indented with four spaces."
   (when (and desc (not (string-empty-p desc)))
-    (widget-insert "\n")
-    (let ((start (point)))
-      (widget-insert "    ")
-      ;; Collapse internal whitespace (the regex grabs newlines+indent from M4).
-      (widget-insert (replace-regexp-in-string "[ \t\n]+" " " (string-trim desc)))
-      (add-text-properties start (point) '(face shadow)))
-    (widget-insert "\n\n")))
+    (let* ((trimmed  (string-trim desc))
+           ;; Collapse horizontal whitespace only (spaces + tabs), keep \n.
+           (no-tabs  (replace-regexp-in-string "[ \t]+" " " trimmed))
+           ;; Strip leading spaces at the start of each line (M4 indentation).
+           (clean    (replace-regexp-in-string "^ +" "" no-tabs))
+           ;; Indent every line with 4 spaces.
+           (indented (replace-regexp-in-string "\n" "\n    " clean)))
+      ;; Blank line before, indented block, blank line after.
+      (widget-insert "\n\n")
+      (let ((start (point)))
+        (widget-insert "    ")
+        (widget-insert indented)
+        (add-text-properties start (point) '(face shadow)))
+      (widget-insert "\n\n"))))
 
 (defun hcv-read-configure-option (configure-string configure-description
                                                    &optional dual-form)
@@ -325,17 +334,27 @@ source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
                   nil t)
             (let* ((config-string (match-string 2))
                    (description   (match-string 3))
-                   ;; Scan ~1200 chars after the match for extra help-string body
-                   ;; that lists alternative forms (e.g. "--with-help=html").
-                   (body-end      (min (+ (match-end 0) 1200) (point-max)))
-                   (body          (buffer-substring-no-properties (match-end 0) body-end))
+                   (after-match   (match-end 0))
+                   (body-end      (min (+ after-match 1200) (point-max)))
+                   (body          (buffer-substring-no-properties after-match body-end))
                    (option-name   (car (split-string config-string "=")))
                    (has-valued    (string-match-p
                                    (concat (regexp-quote option-name) "=") body))
                    (has-flag-only (string-match-p
                                    (concat (regexp-quote option-name) "[[:space:]\n]")
-                                   body)))
-              (push (hcv-read-configure-option config-string description
+                                   body))
+                   ;; Look for an extra [...] block (like the `Usage:'
+                   ;; addendum in AC_ARG_WITH).  It lives AFTER the
+                   ;; AS_HELP_STRING close paren but BEFORE the next
+                   ;; AC_ARG_* or the closing `,)'.
+                   (extra-match   (and (string-match
+                                        "\\`[^A]*?)\\s-*\\[\\([^]]+\\)\\]"
+                                        body)
+                                       (match-string 1 body)))
+                   (full-desc     (if extra-match
+                                      (concat description "\n\n" extra-match)
+                                    description)))
+              (push (hcv-read-configure-option config-string full-desc
                                                (and has-valued has-flag-only))
                     config-list))))
       (message "hcv: configure.ac file not found: %s" configure-ac-file))
