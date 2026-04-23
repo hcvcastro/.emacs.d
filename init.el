@@ -268,13 +268,12 @@ updated, so values set by `config.status' or the defaults file win."
                  (string-empty-p (symbol-value sym)))
         (set sym (funcall thunk))))))
 
-(defun hcv-read-configure-option (configure-string configure-description)
+(defun hcv-read-configure-option (configure-string configure-description
+                                                   &optional dual-form)
   "Parse CONFIGURE-STRING and return a symbol describing the option.
-CONFIGURE-STRING looks like \"--enable-foo\" or \"--with-bar=VALUE\".
-CONFIGURE-DESCRIPTION is stored as a property for later display.
-The returned symbol is interned in `hcv--options-obarray' and carries the
-properties `configure-string', `configure-description', `widget-type', and
-\(for valued options\) `format'."
+When DUAL-FORM is non-nil, the help text showed both `--foo' and
+`--foo=VALUE' variants: emit `toggle-field' widget type (checkbox +
+optional value)."
   (let* ((list-string (split-string configure-string "="))
          (option-name (nth 0 list-string))
          (configure-symbol (intern option-name hcv--options-obarray)))
@@ -282,6 +281,10 @@ properties `configure-string', `configure-description', `widget-type', and
     (put configure-symbol 'configure-string configure-string)
     (put configure-symbol 'configure-description configure-description)
     (cond
+     (dual-form
+      (set configure-symbol (cons nil ""))   ; (enabled . value)
+      (put configure-symbol 'widget-type 'toggle-field)
+      (put configure-symbol 'format (concat option-name "[=%v]")))
      ((= (length list-string) 1)
       (put configure-symbol 'widget-type 'checkbox))
      (t
@@ -309,8 +312,21 @@ source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
           (while (re-search-backward
                   "\\(_ARG_ENABLE\\|_ARG_WITH\\)[^A]*AS_HELP_STRING[^[]*\\[\\([^]]*\\)[^[]*\\[\\([^]]*\\)"
                   nil t)
-            (push (hcv-read-configure-option (match-string 2) (match-string 3))
-                  config-list)))
+            (let* ((config-string (match-string 2))
+                   (description   (match-string 3))
+                   ;; Scan ~1200 chars after the match for extra help-string body
+                   ;; that lists alternative forms (e.g. "--with-help=html").
+                   (body-end      (min (+ (match-end 0) 1200) (point-max)))
+                   (body          (buffer-substring-no-properties (match-end 0) body-end))
+                   (option-name   (car (split-string config-string "=")))
+                   (has-valued    (string-match-p
+                                   (concat (regexp-quote option-name) "=") body))
+                   (has-flag-only (string-match-p
+                                   (concat (regexp-quote option-name) "[[:space:]\n]")
+                                   body)))
+              (push (hcv-read-configure-option config-string description
+                                               (and has-valued has-flag-only))
+                    config-list))))
       (message "hcv: configure.ac file not found: %s" configure-ac-file))
     config-list))
 
@@ -358,9 +374,13 @@ Returns non-nil if at least one option was read, nil otherwise."
                   config-value  (substring list-item (1+ pos)))
           (setq config-symbol (intern list-item hcv--options-obarray)
                 config-value  nil))
-        (if config-value
-            (set config-symbol config-value)
-          (set config-symbol t)))
+        (cond
+ 	  ((eq (get config-symbol 'widget-type) 'toggle-field)
+	   (set config-symbol (cons t (or config-value ""))))
+ 	  (config-value
+	   (set config-symbol config-value))
+	  (t
+	   (set config-symbol t))))
       had-items)))
 
 (defun hcv--unquote-value (value)
@@ -398,10 +418,13 @@ Returns non-nil if at least one option was read, nil otherwise."
                                (substring config-string (1+ pos))))
         (setq config-symbol (intern config-string hcv--options-obarray)
               config-value  nil))
-      (if config-value
-          (set config-symbol config-value)
-        (set config-symbol t)))
-
+      (cond
+ 	((eq (get config-symbol 'widget-type) 'toggle-field)
+  	(set config-symbol (cons t (or config-value ""))))
+	(config-value
+	(set config-symbol config-value))
+	(t
+	(set config-symbol t))))
     had-items))
 
 (when (string-match-p hcv-cool-workspace-dir
@@ -482,21 +505,32 @@ passed to the execute/copy buttons."
                                derived-defaults))
 
   (dolist (config (symbol-value config-list-var))
-    (let* ((type (get config 'widget-type))
-           (value (symbol-value config))
-           (widget
-            (cond
-             ((eq type 'checkbox)
-              (widget-create 'checkbox
-                             :button-suffix (symbol-name config)
-                             value))
-             ((memq type '(editable-field directory file))
-              (widget-create type
-                             :format (get config 'format)
-                             value)))))
-      (put config 'widget widget)
-      (when (eq type 'checkbox)
-        (widget-insert "\n"))))
+  (let* ((type (get config 'widget-type))
+         (value (symbol-value config)))
+    (cond
+     ((eq type 'checkbox)
+      (let ((w (widget-create 'checkbox
+                              :button-suffix (symbol-name config)
+                              value)))
+        (put config 'widget w)
+        (widget-insert "\n")))
+     ((eq type 'toggle-field)
+      (let* ((enabled (and (consp value) (car value)))
+             (valstr  (if (consp value) (cdr value) ""))
+             (cb (widget-create 'checkbox
+                                :button-suffix (symbol-name config)
+                                enabled))
+             (_  (widget-insert "="))
+             (fd (widget-create 'editable-field
+                                :size 30
+                                valstr)))
+        (put config 'widget (cons cb fd))
+        (widget-insert "\n")))
+     ((memq type '(editable-field directory file))
+      (let ((w (widget-create type
+                              :format (get config 'format)
+                              value)))
+        (put config 'widget w))))))
 
   ;; Closures capture config-list-var, source-dir, build-dir, configure-file.
   (widget-create 'push-button
@@ -514,29 +548,28 @@ passed to the execute/copy buttons."
 (defun hcv-get-shell-command (config-list source-dir build-dir configure-file)
   "Build a shell command string to run CONFIGURE-FILE with CONFIG-LIST.
 Intended for display and copy-paste into a shell, not for direct
-execution.
-
-CONFIG-LIST is a list of option symbols (from `hcv--options-obarray'),
-each carrying a `widget' property with its current widget.  For each
-option, emits `--name' for checked checkboxes and `NAME=VALUE' for
-non-empty text/file/directory fields.  Values are shell-quoted.
-
-BUILD-DIR is the directory the command should `cd' into before running
-the script.  SOURCE-DIR is the directory containing CONFIGURE-FILE.
-CONFIGURE-FILE is the relative filename of the configure script to
-invoke."
+execution."
   (let (out-list)
     (dolist (config config-list)
       (let* ((widget (get config 'widget))
-             (type   (get config 'widget-type))
-             (value  (widget-value widget)))
+             (type   (get config 'widget-type)))
         (cond
-         ((and (eq type 'checkbox) value)
-          (push (symbol-name config) out-list))
-         ((and (memq type '(editable-field directory file))
-               (not (string-empty-p value)))
-          (push (concat (symbol-name config) "=" (shell-quote-argument value))
-                out-list)))))
+         ((eq type 'checkbox)
+          (when (widget-value widget)
+            (push (symbol-name config) out-list)))
+         ((eq type 'toggle-field)
+          (let ((enabled (widget-value (car widget)))
+                (valstr  (widget-value (cdr widget))))
+            (when enabled
+              (push (if (string-empty-p valstr)
+                        (symbol-name config)
+                      (concat (symbol-name config) "=" (shell-quote-argument valstr)))
+                    out-list))))
+         ((memq type '(editable-field directory file))
+          (let ((value (widget-value widget)))
+            (when (not (string-empty-p value))
+              (push (concat (symbol-name config) "=" (shell-quote-argument value))
+                    out-list)))))))
     (concat "cd " (shell-quote-argument build-dir)
             " && "
             (shell-quote-argument
