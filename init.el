@@ -217,8 +217,11 @@ the defaults file; only fills options whose current value is empty.")
 (defvar hcv-co-default-build-dir)
 
 ;; --- Shared ---
-(defvar hcv-env-variables '("CXXFLAGS")
-  "Environment variables to expose as editable fields in the configure UI.")
+(defvar hcv-env-variables
+  '(("CXXFLAGS" . "C++ compiler flags. Passed to every C++ invocation. Typical values: `-g -O0' for debugging, `-O2' for release, plus warning flags like `-Werror -Wshadow'."))
+  "Environment variables to expose as editable fields in the configure UI.
+Each entry is either a string NAME (no description) or a cons (NAME . DESCRIPTION).")
+
 (defvar hcv--options-obarray (obarray-make)
   "Private obarray for configure option symbols, to avoid polluting the global obarray.")
 
@@ -281,7 +284,7 @@ horizontal whitespace.  Each line is indented with four spaces."
            ;; Indent every line with 4 spaces.
            (indented (replace-regexp-in-string "\n" "\n    " clean)))
       ;; Blank line before, indented block, blank line after.
-      (widget-insert "\n\n")
+      (widget-insert "\n")
       (let ((start (point)))
         (widget-insert "    ")
         (widget-insert indented)
@@ -361,15 +364,17 @@ source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
     config-list))
 
 (defun hcv-read-default-environment (config-list)
-  "Prepend env-variable entries to CONFIG-LIST and return it.
-Each name in `hcv-env-variables' is interned in `hcv--options-obarray'
-and gets its initial value from the current environment (or empty)."
-  (dolist (name hcv-env-variables config-list)
-    (let ((sym (intern name hcv--options-obarray)))
+  "Prepend env-variable entries to CONFIG-LIST and return it."
+  (dolist (entry hcv-env-variables config-list)
+    (let* ((name (if (consp entry) (car entry) entry))
+           (desc (and (consp entry) (cdr entry)))
+           (sym  (intern name hcv--options-obarray)))
       (set sym (or (getenv name) ""))
       (put sym 'widget-type 'editable-field)
       (put sym 'format (concat name "=%v"))
       (put sym 'tag 'env-variable)
+      (when desc
+        (put sym 'configure-description desc))
       (push sym config-list))))
 
 (defun hcv-read-config-status (config-status)
