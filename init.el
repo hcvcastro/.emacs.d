@@ -570,14 +570,19 @@ loading status/defaults."
 (defun hcv-configure (config-list-var configure-buffer configure-title
                                       configure-ac configure-status configure-default-ac
                                       source-dir build-dir configure-file
-                                       &optional derived-defaults)
+                                      &optional derived-defaults)
   "Render the configure buffer for CONFIGURE-BUFFER.
 CONFIG-LIST-VAR is the symbol of the global variable holding the option
 list for this project.  CONFIGURE-BUFFER is the name of the buffer to
 display.  CONFIGURE-TITLE is inserted at the top as a header.
 CONFIGURE-AC, CONFIGURE-STATUS and CONFIGURE-DEFAULT-AC are the inputs
 used to refresh the list.  SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE are
-passed to the execute/copy buttons."
+passed to the execute/copy buttons.  Optional DERIVED-DEFAULTS is an
+alist of (OPTION . THUNK) used to fill any option still empty after
+loading status/defaults.
+
+`raw-extra' widgets (the EXTRA field) are always rendered at the end of
+the buffer, regardless of their position in the option list."
   (switch-to-buffer configure-buffer)
   (kill-all-local-variables)
   (let ((inhibit-read-only t))
@@ -589,39 +594,47 @@ passed to the execute/copy buttons."
        (hcv-config-list-update configure-ac configure-status configure-default-ac
                                derived-defaults))
 
-  (dolist (config (symbol-value config-list-var))
-    (let* ((type  (get config 'widget-type))
-           (value (symbol-value config))
-           (desc  (get config 'configure-description)))
-      (cond
-       ((eq type 'checkbox)
-        (let ((w (widget-create 'checkbox
-                                :button-suffix (symbol-name config)
-                                value)))
-          (put config 'widget w)))
-       ((eq type 'toggle-field)
-        (let* ((enabled (and (consp value) (car value)))
-               (valstr  (if (consp value) (cdr value) ""))
-               (cb (widget-create 'checkbox
+  ;; Split into non-EXTRA (rendered first) and EXTRA (rendered last),
+  ;; preserving the original order within each group.
+  (let ((rest   '())
+        (extras '()))
+    (dolist (config (symbol-value config-list-var))
+      (if (eq (get config 'widget-type) 'raw-extra)
+          (push config extras)
+        (push config rest)))
+    (dolist (config (append (nreverse rest) (nreverse extras)))
+      (let* ((type  (get config 'widget-type))
+             (value (symbol-value config))
+             (desc  (get config 'configure-description)))
+        (cond
+         ((eq type 'checkbox)
+          (let ((w (widget-create 'checkbox
                                   :button-suffix (symbol-name config)
-                                  enabled))
-               (_  (widget-insert "="))
-               (fd (widget-create 'editable-field
-                                  :size 30
-                                  valstr)))
-          (put config 'widget (cons cb fd))))
-       ((eq type 'raw-extra)
-        (let ((w (widget-create 'editable-field
-                                :format "Extra: %v"
-                                :size 60
-                                value)))
-          (put config 'widget w)))
-       ((memq type '(editable-field directory file))
-        (let ((w (widget-create type
-                                :format (get config 'format)
-                                value)))
-          (put config 'widget w))))
-      (hcv--insert-description desc)))
+                                  value)))
+            (put config 'widget w)))
+         ((eq type 'toggle-field)
+          (let* ((enabled (and (consp value) (car value)))
+                 (valstr  (if (consp value) (cdr value) ""))
+                 (cb (widget-create 'checkbox
+                                    :button-suffix (symbol-name config)
+                                    enabled))
+                 (_  (widget-insert "="))
+                 (fd (widget-create 'editable-field
+                                    :size 30
+                                    valstr)))
+            (put config 'widget (cons cb fd))))
+         ((eq type 'raw-extra)
+          (let ((w (widget-create 'editable-field
+                                  :format "Extra: %v"
+                                  :size 60
+                                  value)))
+            (put config 'widget w)))
+         ((memq type '(editable-field directory file))
+          (let ((w (widget-create type
+                                  :format (get config 'format)
+                                  value)))
+            (put config 'widget w))))
+        (hcv--insert-description desc))))
 
   ;; Closures capture config-list-var, source-dir, build-dir, configure-file.
   (widget-create 'push-button
