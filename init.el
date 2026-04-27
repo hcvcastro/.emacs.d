@@ -225,6 +225,15 @@ Each entry is either a string NAME (no description) or a cons (NAME . DESCRIPTIO
 (defvar hcv--options-obarray (obarray-make)
   "Private obarray for configure option symbols, to avoid polluting the global obarray.")
 
+(defvar hcv-extra-variable
+  '("EXTRA" . "Extra raw flags appended to the configure command. \
+Inserted verbatim (no shell-quoting), so you can pass anything: \
+multiple flags, env vars, shell expansions. Auto-populated from \
+options found in config.status that are not declared in configure.ac.")
+  "Free-form extra options field exposed in the configure UI.
+Cons (NAME . DESCRIPTION).  The value is inserted at the end of the
+generated configure command without quoting.")
+
 (defun hcv--shell-split (string)
   "Split STRING into shell-style tokens.
 Respects single and double quotes.  Does not handle escape sequences."
@@ -363,6 +372,23 @@ source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
       (message "hcv: configure.ac file not found: %s" configure-ac-file))
     config-list))
 
+(defun hcv-read-extra-variable (config-list)
+  "Append the extra free-form entry to CONFIG-LIST and return it.
+Uses `hcv-extra-variable' for the name and description."
+  (let* ((entry hcv-extra-variable)
+         (name  (car entry))
+         (desc  (cdr entry))
+         (sym   (intern name hcv--options-obarray)))
+    (unless (and (boundp sym) (stringp (symbol-value sym)))
+      (set sym ""))
+    (put sym 'widget-type 'raw-extra)
+    (put sym 'format (concat name "=%v"))
+    (put sym 'tag 'extra-variable)
+    (when desc
+      (put sym 'configure-description desc))
+    (push sym config-list)
+    config-list))
+
 (defun hcv-read-default-environment (config-list)
   "Prepend env-variable entries to CONFIG-LIST and return it."
   (dolist (entry hcv-env-variables config-list)
@@ -384,11 +410,12 @@ CONFIG-STATUS must be a path to an executable `config.status' script
 `--config' and parses the quoted argument list.
 
 For each `NAME=VALUE' entry, finds the matching symbol in
-`hcv--options-obarray' and sets its value.  Options without a `=' (flags
-like `--enable-foo') are set to t.
+`hcv--options-obarray' and sets its value.  Options not declared in
+configure.ac are accumulated into the EXTRA symbol so they can be
+reviewed in the configure UI and round-tripped on the next run.
 
 Returns non-nil if at least one option was read, nil otherwise."
-  (let (config-list list-item list-string config-symbol config-value)
+  (let (config-list list-item config-symbol config-value)
     (when (file-exists-p config-status)
       (let ((raw (shell-command-to-string (concat config-status " --config"))))
         (setq config-list
@@ -399,23 +426,43 @@ Returns non-nil if at least one option was read, nil otherwise."
                           (error-message-string err))
                  nil)))))
     (let ((had-items (> (length config-list) 0))
-          pos)
+          pos
+          name
+          (extra-sym (intern-soft "EXTRA" hcv--options-obarray))
+          (orphans '()))
       (while config-list
         (setq list-item (pop config-list))
         (setq pos (string-match "=" list-item))
         (if pos
-            (setq config-symbol (intern (substring list-item 0 pos)
-                                        hcv--options-obarray)
-                  config-value  (substring list-item (1+ pos)))
-          (setq config-symbol (intern list-item hcv--options-obarray)
-                config-value  nil))
+            (setq name         (substring list-item 0 pos)
+                  config-value (substring list-item (1+ pos)))
+          (setq name         list-item
+                config-value nil))
+        (setq config-symbol (intern-soft name hcv--options-obarray))
         (cond
- 	  ((eq (get config-symbol 'widget-type) 'toggle-field)
-	   (set config-symbol (cons t (or config-value ""))))
- 	  (config-value
-	   (set config-symbol config-value))
-	  (t
-	   (set config-symbol t))))
+         ;; Known widget option: assign to existing symbol.
+         ((and config-symbol
+               (get config-symbol 'widget-type)
+               (not (eq (get config-symbol 'widget-type) 'raw-extra)))
+          (cond
+           ((eq (get config-symbol 'widget-type) 'toggle-field)
+            (set config-symbol (cons t (or config-value ""))))
+           (config-value
+            (set config-symbol config-value))
+           (t
+            (set config-symbol t))))
+         ;; Orphan (or EXTRA itself): stash for the EXTRA field.
+         (t
+          (push (if config-value
+                    (concat name "=" (shell-quote-argument config-value))
+                  name)
+                orphans))))
+      ;; Dump orphans into EXTRA, preserving original config.status order.
+      (when extra-sym
+        (set extra-sym
+             (if orphans
+                 (mapconcat #'identity (nreverse orphans) " ")
+               "")))
       had-items)))
 
 (defun hcv--unquote-value (value)
@@ -475,9 +522,10 @@ Returns non-nil if at least one option was read, nil otherwise."
   (setq hcv-cool-config-status (concat hcv-cool-default-build-dir "config.status"))
   (setq hcv-co-config-status (concat hcv-co-default-build-dir "config.status"))
 
-  ;; --- COOL config ---
+;; --- COOL config ---
   (setq hcv-cool-config-list (hcv-read-configure-options hcv-cool-configure-ac))
   (setq hcv-cool-config-list (hcv-read-default-environment hcv-cool-config-list))
+  (setq hcv-cool-config-list (hcv-read-extra-variable hcv-cool-config-list))
   (unless (hcv-read-config-status hcv-cool-config-status)
     (hcv-read-config-default hcv-cool-config-default-ac))
   (hcv--apply-derived-defaults hcv-cool-derived-defaults)
@@ -485,6 +533,7 @@ Returns non-nil if at least one option was read, nil otherwise."
   ;; --- Office config (same workspace, separate source tree) ---
   (setq hcv-co-config-list (hcv-read-configure-options hcv-co-configure-ac))
   (setq hcv-co-config-list (hcv-read-default-environment hcv-co-config-list))
+  (setq hcv-co-config-list (hcv-read-extra-variable hcv-co-config-list))
   (unless (hcv-read-config-status hcv-co-config-status)
     (hcv-read-config-default hcv-co-config-default-ac))
 
@@ -509,8 +558,9 @@ Apply values from CONFIGURE-STATUS if available; otherwise fall back to
 CONFIGURE-DEFAULT-AC.  If DERIVED-DEFAULTS is a non-nil alist of
 \(OPTION . THUNK), apply derived values for any option still unset after
 loading status/defaults."
-  (let ((config-list (hcv-read-default-environment
-                      (hcv-read-configure-options configure-ac))))
+  (let ((config-list (hcv-read-extra-variable
+                      (hcv-read-default-environment
+                       (hcv-read-configure-options configure-ac)))))
     (unless (hcv-read-config-status configure-status)
       (hcv-read-config-default configure-default-ac))
     (when derived-defaults
@@ -560,6 +610,12 @@ passed to the execute/copy buttons."
                                   :size 30
                                   valstr)))
           (put config 'widget (cons cb fd))))
+       ((eq type 'raw-extra)
+        (let ((w (widget-create 'editable-field
+                                :format "Extra: %v"
+                                :size 60
+                                value)))
+          (put config 'widget w)))
        ((memq type '(editable-field directory file))
         (let ((w (widget-create type
                                 :format (get config 'format)
@@ -581,9 +637,7 @@ passed to the execute/copy buttons."
   (widget-setup))
 
 (defun hcv-get-shell-command (config-list source-dir build-dir configure-file)
-  "Build a shell command string to run CONFIGURE-FILE with CONFIG-LIST.
-Intended for display and copy-paste into a shell, not for direct
-execution."
+  "Build a shell command string to run CONFIGURE-FILE with CONFIG-LIST."
   (let (out-list)
     (dolist (config config-list)
       (let* ((widget (get config 'widget))
@@ -600,6 +654,10 @@ execution."
                         (symbol-name config)
                       (concat (symbol-name config) "=" (shell-quote-argument valstr)))
                     out-list))))
+         ((eq type 'raw-extra)
+          (let ((value (widget-value widget)))
+            (when (not (string-empty-p value))
+              (push value out-list))))
          ((memq type '(editable-field directory file))
           (let ((value (widget-value widget)))
             (when (not (string-empty-p value))
