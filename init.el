@@ -370,7 +370,86 @@ source that uses `AC_ARG_ENABLE' / `AC_ARG_WITH' together with
                                                (and has-valued has-flag-only))
                     config-list))))
       (message "hcv: configure.ac file not found: %s" configure-ac-file))
-    config-list))
+    (nconc config-list
+           (hcv-read-system-module-options
+            configure-ac-file (mapcar #'symbol-name config-list)))))
+
+(defun hcv--split-m4-args (argstr)
+  "Split ARGSTR into a list of top-level m4 arguments.
+Commas inside `[...]' quoting are not treated as separators."
+  (let ((args nil) (start 0) (depth 0) (i 0) (n (length argstr)))
+    (while (< i n)
+      (let ((ch (aref argstr i)))
+        (cond
+         ((eq ch ?\[) (setq depth (1+ depth)))
+         ((eq ch ?\]) (setq depth (1- depth)))
+         ((and (eq ch ?,) (= depth 0))
+          (push (substring argstr start i) args)
+          (setq start (1+ i)))))
+      (setq i (1+ i)))
+    (push (substring argstr start) args)
+    (nreverse args)))
+
+(defun hcv--m4-unbracket (str)
+  "Trim whitespace and a surrounding `[...]' quote from STR."
+  (let ((str (string-trim str)))
+    (if (and (string-prefix-p "[" str) (string-suffix-p "]" str))
+        (string-trim (substring str 1 -1))
+      str)))
+
+(defun hcv-read-system-module-options (configure-ac-file &optional explicit-names)
+  "Return option symbols implied by `libo_CHECK_SYSTEM_MODULE' calls.
+The macro (see `engine/m4/libo_externals.m4') generates `--enable-/--disable-'
+and `--with-system-/--without-system-' switches that never appear literally in
+CONFIGURE-AC-FILE, so the AS_HELP_STRING scan in `hcv-read-configure-options'
+misses them.  Mirror the macro's own logic: argument $1 is the lowercase name,
+$4 selects the enable switch, $5 selects the system switch.
+
+EXPLICIT-NAMES is the list of option names already declared explicitly in this
+same parse run; such options are skipped to avoid duplicates.  Dedup is done
+against this per-run list rather than the persistent `hcv--options-obarray',
+since these functions run on every buffer refresh and the obarray would
+otherwise already hold the symbols from a previous run, dropping every option."
+  (let ((config-list nil)
+        (seen nil)
+        (case-fold-search nil))
+    (when (file-exists-p configure-ac-file)
+      (with-temp-buffer
+        (insert-file-contents configure-ac-file)
+        (goto-char (point-min))
+        (while (re-search-forward
+                "^[ \t]*libo_CHECK_SYSTEM_MODULE(\\(.*\\))" nil t)
+          (let* ((args   (mapcar #'hcv--m4-unbracket
+                                 (hcv--split-m4-args (match-string 1))))
+                 (name   (nth 0 args))
+                 (enable (or (nth 3 args) ""))
+                 (system (or (nth 4 args) "")))
+            (unless (or (null name) (string-empty-p name))
+              (dolist (opt
+                       (list
+                        ;; enable/disable switch ($4)
+                        (cond
+                         ((string= enable "enabled")
+                          (cons (concat "--disable-" name)
+                                (format "Disable %s support." name)))
+                         ((string= enable "disabled")
+                          (cons (concat "--enable-" name)
+                                (format "Enable %s support." name))))
+                        ;; system switch ($5)
+                        (cond
+                         ((string= system "system")
+                          (cons (concat "--without-system-" name)
+                                (format "Build and bundle the internal %s." name)))
+                         ((member system '("" "internal" "system-if-linux"))
+                          (cons (concat "--with-system-" name)
+                                (format "Use %s from the operating system." name))))))
+                (when (and opt
+                           (not (member (car opt) explicit-names))
+                           (not (member (car opt) seen)))
+                  (push (car opt) seen)
+                  (push (hcv-read-configure-option (car opt) (cdr opt))
+                        config-list))))))))
+    (nreverse config-list)))
 
 (defun hcv-read-extra-variable (config-list)
   "Append the extra free-form entry to CONFIG-LIST and return it.
