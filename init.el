@@ -300,31 +300,59 @@ horizontal whitespace.  Each line is indented with four spaces."
         (add-text-properties start (point) '(face shadow)))
       (widget-insert "\n\n"))))
 
+(defun hcv--decode-m4-quadrigraphs (string)
+  "Decode autoconf/M4 quadrigraphs in STRING to their literal characters.
+These appear in AS_HELP_STRING text where literal `[', `]', `#' and
+braces must be escaped from M4 quoting (e.g. `--enable-foo@<:@=no@:>@'
+stands for `--enable-foo[=no]').  Returns STRING unchanged when nil."
+  (if (null string)
+      string
+    (let ((s string))
+      (dolist (pair '(("@<:@" . "[") ("@:>@" . "]") ("@%:@" . "#")
+                      ("@{:@" . "{") ("@:}@" . "}") ("@&t@" . "")))
+        (setq s (replace-regexp-in-string
+                 (regexp-quote (car pair)) (cdr pair) s t t)))
+      s)))
+
 (defun hcv-read-configure-option (configure-string configure-description
                                                    &optional dual-form)
   "Parse CONFIGURE-STRING and return a symbol describing the option.
 When DUAL-FORM is non-nil, the help text showed both `--foo' and
 `--foo=VALUE' variants: emit `toggle-field' widget type (checkbox +
-optional value)."
-  (let* ((list-string (split-string configure-string "="))
-         (option-name (nth 0 list-string))
+optional value).  An option written `--foo[=VALUE]' (optional value) is
+likewise rendered as a `toggle-field'."
+  (let* ((configure-string (hcv--decode-m4-quadrigraphs configure-string))
+         (configure-description (hcv--decode-m4-quadrigraphs configure-description))
+         ;; `--foo[=VALUE]' means the value is optional.
+         (optional-value (string-match-p "\\[=?" configure-string))
+         ;; Option name: everything before the first `[' or `=' (the
+         ;; bracket of an optional value comes before its `=').
+         (name-end (let ((b (string-match "\\[" configure-string))
+                         (e (string-match "=" configure-string)))
+                     (cond ((and b e) (min b e))
+                           (b b)
+                           (e e)
+                           (t (length configure-string)))))
+         (option-name (substring configure-string 0 name-end))
          (configure-symbol (intern option-name hcv--options-obarray))
          ;; Autoconf negative form (--without-/--disable-), or nil.
-         (negative (hcv--negative-option-name option-name)))
+         (negative (hcv--negative-option-name option-name))
+         (has-value (or optional-value (string-match-p "=" configure-string))))
     (set configure-symbol nil)
     (put configure-symbol 'configure-string configure-string)
     (put configure-symbol 'configure-description configure-description)
     (cond
      ;; A flag-with-optional-value option, rendered as a checkbox plus an
-     ;; optional value field.  This covers both options whose help text
-     ;; shows both `--foo' and `--foo=VALUE' (DUAL-FORM) and any valued
-     ;; `--with-'/`--enable-' option, so the latter can be turned on/off
-     ;; with an optional value instead of being a bare value field.
-     ((or dual-form (and negative (> (length list-string) 1)))
+     ;; optional value field.  This covers options whose help text shows
+     ;; both `--foo' and `--foo=VALUE' (DUAL-FORM), the explicit optional
+     ;; `--foo[=VALUE]' form, and any valued `--with-'/`--enable-' option,
+     ;; so the latter can be turned on/off with an optional value instead
+     ;; of being a bare value field.
+     ((or dual-form optional-value (and negative has-value))
       (set configure-symbol (cons nil ""))   ; (enabled . value)
       (put configure-symbol 'widget-type 'toggle-field)
       (put configure-symbol 'format (concat option-name "[=%v]")))
-     ((= (length list-string) 1)
+     ((not has-value)
       (put configure-symbol 'widget-type 'checkbox))
      (t
       (set configure-symbol "")
