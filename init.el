@@ -805,7 +805,7 @@ the buffer, regardless of their position in the option list."
             (hcv--add-negative-checkbox config cb)))
          ((eq type 'raw-extra)
           (let ((w (widget-create 'editable-field
-                                  :format "Extra: %v"
+                                  :format (hcv--bold-label-format "Extra: %v")
                                   :size 60
                                   value)))
             (put config 'widget w)))
