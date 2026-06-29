@@ -308,12 +308,19 @@ When DUAL-FORM is non-nil, the help text showed both `--foo' and
 optional value)."
   (let* ((list-string (split-string configure-string "="))
          (option-name (nth 0 list-string))
-         (configure-symbol (intern option-name hcv--options-obarray)))
+         (configure-symbol (intern option-name hcv--options-obarray))
+         ;; Autoconf negative form (--without-/--disable-), or nil.
+         (negative (hcv--negative-option-name option-name)))
     (set configure-symbol nil)
     (put configure-symbol 'configure-string configure-string)
     (put configure-symbol 'configure-description configure-description)
     (cond
-     (dual-form
+     ;; A flag-with-optional-value option, rendered as a checkbox plus an
+     ;; optional value field.  This covers both options whose help text
+     ;; shows both `--foo' and `--foo=VALUE' (DUAL-FORM) and any valued
+     ;; `--with-'/`--enable-' option, so the latter can be turned on/off
+     ;; with an optional value instead of being a bare value field.
+     ((or dual-form (and negative (> (length list-string) 1)))
       (set configure-symbol (cons nil ""))   ; (enabled . value)
       (put configure-symbol 'widget-type 'toggle-field)
       (put configure-symbol 'format (concat option-name "[=%v]")))
@@ -327,6 +334,11 @@ optional value)."
             ((string-match-p "file" configure-string) 'file)
             ((string-match-p "\\(path\\|dir\\|prefix\\)" configure-string) 'directory)
             (t 'editable-field)))))
+    ;; Record the negative form so the UI can offer it as a second
+    ;; checkbox.  Reset on every refresh; `hcv-read-config-status'
+    ;; re-selects it from config.status.
+    (put configure-symbol 'negatable negative)
+    (put configure-symbol 'negative-selected nil)
     configure-symbol))
 
 (defun hcv-read-configure-options (configure-ac-file)
@@ -482,6 +494,25 @@ Uses `hcv-extra-variable' for the name and description."
         (put sym 'configure-description desc))
       (push sym config-list))))
 
+(defun hcv--negative-option-name (name)
+  "Return the autoconf negative form of option NAME, or nil if it has none.
+`--with-X' maps to `--without-X' and `--enable-X' to `--disable-X'."
+  (cond
+   ((string-prefix-p "--with-" name)
+    (concat "--without-" (substring name (length "--with-"))))
+   ((string-prefix-p "--enable-" name)
+    (concat "--disable-" (substring name (length "--enable-"))))))
+
+(defun hcv--positive-option-name (name)
+  "Return the positive form of the negative option NAME, or nil if none.
+Inverse of `hcv--negative-option-name': `--without-X' maps to `--with-X'
+and `--disable-X' to `--enable-X'."
+  (cond
+   ((string-prefix-p "--without-" name)
+    (concat "--with-" (substring name (length "--without-"))))
+   ((string-prefix-p "--disable-" name)
+    (concat "--enable-" (substring name (length "--disable-"))))))
+
 (defun hcv--apply-option-value (sym value)
   "Apply parsed VALUE to option SYM according to its widget type.
 VALUE is the string found after `=' in a `NAME=VALUE' entry, or nil when
@@ -553,6 +584,14 @@ Returns non-nil if at least one option was read, nil otherwise."
                (get config-symbol 'widget-type)
                (not (eq (get config-symbol 'widget-type) 'raw-extra)))
           (hcv--apply-option-value config-symbol config-value))
+         ;; Negative form (--without-/--disable-) of a known negatable
+         ;; option: select its negative checkbox instead of orphaning it.
+         ((let* ((positive (hcv--positive-option-name name))
+                 (pos-sym  (and positive
+                                (intern-soft positive hcv--options-obarray))))
+            (when (and pos-sym (get pos-sym 'negatable))
+              (put pos-sym 'negative-selected t)
+              t)))
          ;; Orphan (or EXTRA itself): stash for the EXTRA field.
          (t
           (push (if config-value
@@ -578,7 +617,7 @@ Returns non-nil if at least one option was read, nil otherwise."
 (defun hcv-read-config-default (configure-default)
   "Read default option values from CONFIGURE-DEFAULT and apply them.
 ..."
-  (let (lines had-items config-string pos config-symbol config-value)
+  (let (lines had-items pos)
     (if (file-exists-p configure-default)
         (let ((raw (with-temp-buffer
                      (insert-file-contents configure-default)
@@ -595,14 +634,16 @@ Returns non-nil if at least one option was read, nil otherwise."
 
     (dolist (config-string lines)
       (setq pos (string-match "=" config-string))
-      (if pos
-          (setq config-symbol (intern (substring config-string 0 pos)
-                                      hcv--options-obarray)
-                config-value  (hcv--unquote-value
-                               (substring config-string (1+ pos))))
-        (setq config-symbol (intern config-string hcv--options-obarray)
-              config-value  nil))
-      (hcv--apply-option-value config-symbol config-value))
+      (let* ((name (if pos (substring config-string 0 pos) config-string))
+             (value (and pos (hcv--unquote-value
+                              (substring config-string (1+ pos)))))
+             (positive (hcv--positive-option-name name))
+             (pos-sym  (and positive
+                            (intern-soft positive hcv--options-obarray))))
+        (if (and pos-sym (get pos-sym 'negatable))
+            ;; Negative form of a known negatable option.
+            (put pos-sym 'negative-selected t)
+          (hcv--apply-option-value (intern name hcv--options-obarray) value))))
     had-items))
 
 (when (string-match-p hcv-cool-workspace-dir
@@ -663,6 +704,47 @@ loading status/defaults."
       (hcv--apply-derived-defaults derived-defaults))
     config-list))
 
+(defun hcv--bold-label-format (format)
+  "Return FORMAT with its literal label (the text before %v) emboldened.
+Valued widgets render their option name as plain `:format' text, unlike
+checkboxes whose `:button-suffix' name is shown with the bold
+`widget-button' face.  Applying the same face here keeps the option
+names visually consistent across the configure buffer."
+  (if (string-match "%v" format)
+      (concat (propertize (substring format 0 (match-beginning 0))
+                          'face 'widget-button)
+              (substring format (match-beginning 0)))
+    format))
+
+(defun hcv--add-negative-checkbox (config positive-checkbox)
+  "Render the `--without-/--disable-' checkbox for CONFIG when negatable.
+POSITIVE-CHECKBOX is the widget to uncheck when the negative one is
+selected (and vice versa), or nil when CONFIG has no positive checkbox
+\(as for a plain valued option, where the negative form simply overrides
+the value field at command-build time).  The created widget is stored
+under CONFIG's `negative-widget' property; its initial state comes from
+the `negative-selected' property set while reading config.status."
+  (let ((negative (get config 'negatable)))
+    (when negative
+      ;; Render the negative checkbox on its own line, flush left, so the
+      ;; --without-/--disable- box lines up in the same column as its
+      ;; positive option instead of crowding the same line.
+      (widget-insert "\n")
+      (let ((nw (widget-create 'checkbox
+                               :button-suffix negative
+                               (and (get config 'negative-selected) t))))
+        (put config 'negative-widget nw)
+        ;; Mutual exclusion: selecting one form clears the other.
+        (when positive-checkbox
+          (widget-put positive-checkbox :notify
+                      (lambda (w &rest _)
+                        (when (widget-value w)
+                          (widget-value-set nw nil))))
+          (widget-put nw :notify
+                      (lambda (w &rest _)
+                        (when (widget-value w)
+                          (widget-value-set positive-checkbox nil)))))))))
+
 (defun hcv-configure (config-list-var configure-buffer configure-title
                                       configure-ac configure-status configure-default-ac
                                       source-dir build-dir configure-file
@@ -707,7 +789,8 @@ the buffer, regardless of their position in the option list."
           (let ((w (widget-create 'checkbox
                                   :button-suffix (symbol-name config)
                                   value)))
-            (put config 'widget w)))
+            (put config 'widget w)
+            (hcv--add-negative-checkbox config w)))
          ((eq type 'toggle-field)
           (let* ((enabled (and (consp value) (car value)))
                  (valstr  (if (consp value) (cdr value) ""))
@@ -718,7 +801,8 @@ the buffer, regardless of their position in the option list."
                  (fd (widget-create 'editable-field
                                     :size 30
                                     valstr)))
-            (put config 'widget (cons cb fd))))
+            (put config 'widget (cons cb fd))
+            (hcv--add-negative-checkbox config cb)))
          ((eq type 'raw-extra)
           (let ((w (widget-create 'editable-field
                                   :format "Extra: %v"
@@ -726,8 +810,12 @@ the buffer, regardless of their position in the option list."
                                   value)))
             (put config 'widget w)))
          ((memq type '(editable-field directory file))
+          ;; Plain valued options (env vars, --prefix, …): not negatable,
+          ;; so just a labelled value field.  Negatable valued options are
+          ;; parsed as `toggle-field' and handled above.
           (let ((w (widget-create type
-                                  :format (get config 'format)
+                                  :format (hcv--bold-label-format
+                                           (get config 'format))
                                   value)))
             (put config 'widget w))))
         (hcv--insert-description desc))))
@@ -750,8 +838,13 @@ the buffer, regardless of their position in the option list."
   (let (out-list)
     (dolist (config config-list)
       (let* ((widget (get config 'widget))
-             (type   (get config 'widget-type)))
+             (type   (get config 'widget-type))
+             (neg-w  (get config 'negative-widget)))
         (cond
+         ;; Negative form selected: emit --without-/--disable- and skip
+         ;; the positive form entirely.
+         ((and neg-w (widget-value neg-w))
+          (push (get config 'negatable) out-list))
          ((eq type 'checkbox)
           (when (widget-value widget)
             (push (symbol-name config) out-list)))
