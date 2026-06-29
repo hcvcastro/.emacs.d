@@ -511,22 +511,33 @@ recursion."
                 names)))))
     names))
 
+(defun hcv--file-contains-p (file string)
+  "Return non-nil if FILE exists and contains STRING."
+  (and (file-readable-p file)
+       (with-temp-buffer
+         (insert-file-contents file)
+         (goto-char (point-min))
+         (search-forward string nil t))))
+
 (defun hcv-read-distro-option (config-list configure-ac-file)
   "Prepend the autogen.sh `--with-distro' option to CONFIG-LIST when applicable.
-CONFIGURE-AC-FILE having a sibling `distro-configs/' directory marks an
-autogen.sh-driven tree (the engine); `--with-distro' is handled there,
-not in configure.ac, so it never appears via `hcv-read-configure-options'.
+Only added when the sibling `autogen.sh' of CONFIGURE-AC-FILE handles a
+`--with-distro' argument: autogen.sh expands a set from distro-configs/
+into real configure options, so the option is not declared in
+configure.ac and only exists for autogen.sh-driven trees (the engine,
+not COOL).
 
 Rendered as a `toggle-field' (checkbox + optional value), with no
 `--without-' form.  The value is a distro-config name; the available
-names are listed in the option's description."
-  (let* ((dir (concat (or (file-name-directory configure-ac-file) "")
-                      "distro-configs"))
-         (configs (and (file-directory-p dir)
-                       (sort (hcv--distro-configs dir) #'string<))))
-    (if (null configs)
+names (if any) are listed in the option's description."
+  (let* ((dir     (or (file-name-directory configure-ac-file) ""))
+         (autogen (concat dir "autogen.sh")))
+    (if (not (hcv--file-contains-p autogen "--with-distro"))
         config-list
-      (let ((sym (intern "--with-distro" hcv--options-obarray)))
+      (let* ((distro-dir (concat dir "distro-configs"))
+             (configs (and (file-directory-p distro-dir)
+                           (sort (hcv--distro-configs distro-dir) #'string<)))
+             (sym (intern "--with-distro" hcv--options-obarray)))
         (unless (and (boundp sym) (consp (symbol-value sym)))
           (set sym (cons nil "")))
         (put sym 'widget-type 'toggle-field)
@@ -537,8 +548,10 @@ names are listed in the option's description."
         (put sym 'negative-selected nil)
         (put sym 'configure-description
              (concat "autogen.sh option (not declared in configure.ac): apply "
-                     "a set of options from distro-configs/.  Available: "
-                     (mapconcat #'identity configs ", ") "."))
+                     "a set of options from distro-configs/."
+                     (when configs
+                       (concat "  Available: "
+                               (mapconcat #'identity configs ", ") "."))))
         (cons sym config-list)))))
 
 (defun hcv-read-extra-variable (config-list)
