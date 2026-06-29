@@ -840,18 +840,25 @@ the `negative-selected' property set while reading config.status."
                         (when (widget-value w)
                           (widget-value-set positive-checkbox nil)))))))))
 
-(defun hcv--popup-choose (title items)
-  "Let the user pick one of ITEMS (strings) and return it, or nil.
-Shows a graphical popup menu when the command was invoked with the mouse
-and popups are available; otherwise falls back to minibuffer completion."
-  (when items
-    (if (and (display-popup-menus-p)
-             (listp last-nonmenu-event))
-        (x-popup-menu
-         last-nonmenu-event
-         (list title (cons title (mapcar (lambda (i) (cons i i)) items))))
-      (let ((choice (completing-read (format "%s: " title) items nil t)))
-        (and choice (not (string-empty-p choice)) choice)))))
+(defun hcv--insert-choice-radios (config checkbox field)
+  "Render CONFIG's `choices' as radio buttons below its value field.
+Selecting a radio fills FIELD with the chosen value and enables CHECKBOX.
+The radio matching the current value (if any) starts selected."
+  (let* ((choices (get config 'choices))
+         (current (and (consp (symbol-value config)) (cdr (symbol-value config))))
+         (items   (mapcar (lambda (c) (list 'item :tag c :value c)) choices))
+         (fld field)
+         (chk checkbox))
+    (widget-insert "\n")
+    (apply #'widget-create 'radio-button-choice
+           :value (and (member current choices) current)
+           :indent 4
+           :notify (lambda (w &rest _)
+                     (let ((v (widget-value w)))
+                       (when v
+                         (widget-value-set fld v)
+                         (widget-value-set chk t))))
+           items)))
 
 (defun hcv-configure (config-list-var configure-buffer configure-title
                                       configure-ac configure-status configure-default-ac
@@ -910,21 +917,10 @@ the buffer, regardless of their position in the option list."
                                     :size 30
                                     valstr)))
             (put config 'widget (cons cb fd))
-            ;; Optional popup to pick the value from a known set of items.
+            (hcv--add-negative-checkbox config cb)
+            ;; Offer the known values as radio buttons below the field.
             (when (get config 'choices)
-              (widget-insert " ")
-              (let ((choices (get config 'choices))
-                    (field   fd)
-                    (check   cb)
-                    (title   (symbol-name config)))
-                (widget-create 'push-button
-                               :notify (lambda (&rest _)
-                                         (let ((pick (hcv--popup-choose title choices)))
-                                           (when (and pick (not (string-empty-p pick)))
-                                             (widget-value-set field pick)
-                                             (widget-value-set check t))))
-                               "choose")))
-            (hcv--add-negative-checkbox config cb)))
+              (hcv--insert-choice-radios config cb fd))))
          ((eq type 'raw-extra)
           (let ((w (widget-create 'editable-field
                                   :format (hcv--bold-label-format "Extra: %v")
