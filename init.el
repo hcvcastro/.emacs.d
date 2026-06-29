@@ -491,6 +491,56 @@ otherwise already hold the symbols from a previous run, dropping every option."
                         config-list))))))))
     (nreverse config-list)))
 
+(defun hcv--distro-configs (dir &optional prefix)
+  "Return the list of distro-config names found under DIR.
+Each name is relative to the top `distro-configs' directory, without the
+`.conf' extension; subdirectories contribute a `SUBDIR/' prefix,
+mirroring autogen.sh's `--with-distro' lookup.  PREFIX is used by the
+recursion."
+  (let (names)
+    (dolist (entry (directory-files dir nil "\\`[^.]"))
+      (let ((full (expand-file-name entry dir)))
+        (cond
+         ((file-directory-p full)
+          (setq names (nconc names
+                             (hcv--distro-configs
+                              full (concat (or prefix "") entry "/")))))
+         ((string-suffix-p ".conf" entry)
+          (push (concat (or prefix "")
+                        (substring entry 0 (- (length entry) (length ".conf"))))
+                names)))))
+    names))
+
+(defun hcv-read-distro-option (config-list configure-ac-file)
+  "Prepend the autogen.sh `--with-distro' option to CONFIG-LIST when applicable.
+CONFIGURE-AC-FILE having a sibling `distro-configs/' directory marks an
+autogen.sh-driven tree (the engine); `--with-distro' is handled there,
+not in configure.ac, so it never appears via `hcv-read-configure-options'.
+
+Rendered as a `toggle-field' (checkbox + optional value), with no
+`--without-' form.  The value is a distro-config name; the available
+names are listed in the option's description."
+  (let* ((dir (concat (or (file-name-directory configure-ac-file) "")
+                      "distro-configs"))
+         (configs (and (file-directory-p dir)
+                       (sort (hcv--distro-configs dir) #'string<))))
+    (if (null configs)
+        config-list
+      (let ((sym (intern "--with-distro" hcv--options-obarray)))
+        (unless (and (boundp sym) (consp (symbol-value sym)))
+          (set sym (cons nil "")))
+        (put sym 'widget-type 'toggle-field)
+        (put sym 'format "--with-distro[=%v]")
+        ;; autogen.sh expands --with-distro itself, so there is no
+        ;; --without- counterpart: keep it off the negative-checkbox path.
+        (put sym 'negatable nil)
+        (put sym 'negative-selected nil)
+        (put sym 'configure-description
+             (concat "autogen.sh option (not declared in configure.ac): apply "
+                     "a set of options from distro-configs/.  Available: "
+                     (mapconcat #'identity configs ", ") "."))
+        (cons sym config-list)))))
+
 (defun hcv-read-extra-variable (config-list)
   "Append the extra free-form entry to CONFIG-LIST and return it.
 Uses `hcv-extra-variable' for the name and description."
@@ -723,9 +773,11 @@ Apply values from CONFIGURE-STATUS if available; otherwise fall back to
 CONFIGURE-DEFAULT-AC.  If DERIVED-DEFAULTS is a non-nil alist of
 \(OPTION . THUNK), apply derived values for any option still unset after
 loading status/defaults."
-  (let ((config-list (hcv-read-extra-variable
-                      (hcv-read-default-environment
-                       (hcv-read-configure-options configure-ac)))))
+  (let ((config-list (hcv-read-distro-option
+                      (hcv-read-extra-variable
+                       (hcv-read-default-environment
+                        (hcv-read-configure-options configure-ac)))
+                      configure-ac)))
     (unless (hcv-read-config-status configure-status)
       (hcv-read-config-default configure-default-ac))
     (when derived-defaults
