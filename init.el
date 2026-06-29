@@ -482,6 +482,35 @@ Uses `hcv-extra-variable' for the name and description."
         (put sym 'configure-description desc))
       (push sym config-list))))
 
+(defun hcv--apply-option-value (sym value)
+  "Apply parsed VALUE to option SYM according to its widget type.
+VALUE is the string found after `=' in a `NAME=VALUE' entry, or nil when
+the option appeared as a bare flag.  The value is coerced to a
+representation valid for SYM's widget type.  If no valid value can be
+derived for the type (e.g. a valued option that came without a value, or
+any other type mismatch), SYM is left untouched so it keeps its default.
+
+This keeps the configure UI working when `config.status' contains an
+option with a value that does not match the option's declared type:
+instead of forcing an invalid value (which later makes `widget-create'
+error and aborts the whole buffer), the option simply falls back to its
+default."
+  (pcase (get sym 'widget-type)
+    ('toggle-field
+     (set sym (cons t (or value ""))))
+    ('checkbox
+     ;; A checkbox is a presence flag; its widget value must be boolean.
+     ;; Any appearance in the config means the flag is enabled, and the
+     ;; flag is emitted without a value anyway, so a value is ignored.
+     (set sym t))
+    ((or 'editable-field 'directory 'file)
+     ;; Valued widgets require a string; keep the default otherwise.
+     (when (stringp value)
+       (set sym value)))
+    (_
+     ;; Unknown/unrendered symbol: preserve the previous lenient behaviour.
+     (if value (set sym value) (set sym t)))))
+
 (defun hcv-read-config-status (config-status)
   "Read values from CONFIG-STATUS and update their symbols in `hcv--options-obarray'.
 CONFIG-STATUS must be a path to an executable `config.status' script
@@ -523,13 +552,7 @@ Returns non-nil if at least one option was read, nil otherwise."
          ((and config-symbol
                (get config-symbol 'widget-type)
                (not (eq (get config-symbol 'widget-type) 'raw-extra)))
-          (cond
-           ((eq (get config-symbol 'widget-type) 'toggle-field)
-            (set config-symbol (cons t (or config-value ""))))
-           (config-value
-            (set config-symbol config-value))
-           (t
-            (set config-symbol t))))
+          (hcv--apply-option-value config-symbol config-value))
          ;; Orphan (or EXTRA itself): stash for the EXTRA field.
          (t
           (push (if config-value
@@ -579,13 +602,7 @@ Returns non-nil if at least one option was read, nil otherwise."
                                (substring config-string (1+ pos))))
         (setq config-symbol (intern config-string hcv--options-obarray)
               config-value  nil))
-      (cond
- 	((eq (get config-symbol 'widget-type) 'toggle-field)
-  	(set config-symbol (cons t (or config-value ""))))
-	(config-value
-	(set config-symbol config-value))
-	(t
-	(set config-symbol t))))
+      (hcv--apply-option-value config-symbol config-value))
     had-items))
 
 (when (string-match-p hcv-cool-workspace-dir
