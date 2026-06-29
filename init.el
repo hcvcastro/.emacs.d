@@ -542,6 +542,8 @@ names (if any) are listed in the option's description."
           (set sym (cons nil "")))
         (put sym 'widget-type 'toggle-field)
         (put sym 'format "--with-distro[=%v]")
+        ;; Offer the available configs through a popup next to the field.
+        (put sym 'choices configs)
         ;; autogen.sh expands --with-distro itself, so there is no
         ;; --without- counterpart: keep it off the negative-checkbox path.
         (put sym 'negatable nil)
@@ -838,6 +840,19 @@ the `negative-selected' property set while reading config.status."
                         (when (widget-value w)
                           (widget-value-set positive-checkbox nil)))))))))
 
+(defun hcv--popup-choose (title items)
+  "Let the user pick one of ITEMS (strings) and return it, or nil.
+Shows a graphical popup menu when the command was invoked with the mouse
+and popups are available; otherwise falls back to minibuffer completion."
+  (when items
+    (if (and (display-popup-menus-p)
+             (listp last-nonmenu-event))
+        (x-popup-menu
+         last-nonmenu-event
+         (list title (cons title (mapcar (lambda (i) (cons i i)) items))))
+      (let ((choice (completing-read (format "%s: " title) items nil t)))
+        (and choice (not (string-empty-p choice)) choice)))))
+
 (defun hcv-configure (config-list-var configure-buffer configure-title
                                       configure-ac configure-status configure-default-ac
                                       source-dir build-dir configure-file
@@ -895,6 +910,20 @@ the buffer, regardless of their position in the option list."
                                     :size 30
                                     valstr)))
             (put config 'widget (cons cb fd))
+            ;; Optional popup to pick the value from a known set of items.
+            (when (get config 'choices)
+              (widget-insert " ")
+              (let ((choices (get config 'choices))
+                    (field   fd)
+                    (check   cb)
+                    (title   (symbol-name config)))
+                (widget-create 'push-button
+                               :notify (lambda (&rest _)
+                                         (let ((pick (hcv--popup-choose title choices)))
+                                           (when (and pick (not (string-empty-p pick)))
+                                             (widget-value-set field pick)
+                                             (widget-value-set check t))))
+                               "choose")))
             (hcv--add-negative-checkbox config cb)))
          ((eq type 'raw-extra)
           (let ((w (widget-create 'editable-field
