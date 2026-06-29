@@ -1188,6 +1188,124 @@ configure for both projects."
       (add-to-history 'compile-history cmd)
       (compile cmd))))
 
+;;; --- Run the Qt app (coda-qt) on an X display -----------------------------
+;; Shown in the COOL menu only when the current build is configured/built with
+;; --enable-qtapp.  Launches <build>/qt/coda-qt directly on a chosen display,
+;; forcing software rendering so it also works on GPU-less / headless servers.
+
+(defcustom hcv-coda-qt-display (or (getenv "DISPLAY") ":99")
+  "X display the coda-qt run menu starts with."
+  :type 'string)
+
+(defcustom hcv-coda-qt-chromium-flags
+  "--disable-gpu --disable-gpu-compositing --disable-software-rasterizer --no-sandbox"
+  "Flags passed to the embedded Chromium via QTWEBENGINE_CHROMIUM_FLAGS."
+  :type 'string)
+
+(defvar hcv-coda-qt-software-env
+  '("LIBGL_ALWAYS_SOFTWARE=1"
+    "QT_QUICK_BACKEND=software"
+    "QT_OPENGL=software"
+    "QTWEBENGINE_DISABLE_SANDBOX=1")
+  "Environment forcing software rendering for Qt (no GPU).
+The embedded Chromium flags are added separately from
+`hcv-coda-qt-chromium-flags' so they can be edited in the run UI.")
+
+(defun hcv-coda-qt-binary ()
+  "Path to the Qt app binary for the current COOL build."
+  (expand-file-name "qt/coda-qt" hcv-cool-default-build-dir))
+
+(defun hcv-coda-qt-available-p ()
+  "Non-nil if the current build offers the Qt app.
+True when the qt/coda-qt binary exists, or the build was configured with
+--enable-qtapp (so the entry appears as soon as you configure for Qt)."
+  (or (and (stringp hcv-cool-default-build-dir)
+           (not (string-empty-p hcv-cool-default-build-dir))
+           (file-executable-p (hcv-coda-qt-binary)))
+      (and (stringp hcv-cool-config-status)
+           (file-exists-p hcv-cool-config-status)
+           (with-temp-buffer
+             (insert-file-contents hcv-cool-config-status)
+             (and (re-search-forward "--enable-qtapp" nil t) t)))))
+
+(defvar hcv-coda-qt-buffer "*coda-qt parameters*"
+  "Buffer name for the coda-qt run-parameters UI.")
+
+(defvar hcv-coda-qt-project-name "coda-qt"
+  "Header label for the coda-qt run-parameters UI.")
+
+(defun hcv-coda-qt--display-connects-p (display)
+  "Whether X DISPLAY accepts a connection.
+Returns t/nil via xdpyinfo (or xset as a fallback); returns the symbol
+`unknown' when neither probing tool is installed."
+  (cond
+   ((executable-find "xdpyinfo")
+    (eq 0 (call-process "xdpyinfo" nil nil nil "-display" display)))
+   ((executable-find "xset")
+    (eq 0 (call-process "xset" nil nil nil "-display" display "q")))
+   (t 'unknown)))
+
+(defun hcv-coda-qt--launch (display document chromium-flags)
+  "Launch the current build's Qt app on DISPLAY opening DOCUMENT.
+CHROMIUM-FLAGS is exported as QTWEBENGINE_CHROMIUM_FLAGS.  Forces software
+rendering; output streams to the async buffer.  Aborts if DISPLAY is not
+reachable (start the X session first)."
+  (pcase (hcv-coda-qt--display-connects-p display)
+    ('nil (user-error "Display %s is not reachable — start the X session first"
+                      display))
+    ('unknown (message "coda-qt: cannot verify display %s (no xdpyinfo/xset); launching anyway"
+                       display)))
+  (let* ((process-environment
+          (append (list (concat "DISPLAY=" display)
+                        (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
+                  hcv-coda-qt-software-env
+                  process-environment))
+         (default-directory (file-name-directory (hcv-coda-qt-binary)))
+         (cmd (concat "./coda-qt"
+                      (when (and document (not (string-empty-p document)))
+                        (concat " " (shell-quote-argument document))))))
+    (async-shell-command cmd (format "*coda-qt %s*" display))))
+
+(defun hcv-coda-qt ()
+  "Open a widget buffer to set coda-qt run parameters, with a Run button.
+Modeled on the Collabora configure UI: edit the fields, then press Run."
+  (interactive)
+  (switch-to-buffer hcv-coda-qt-buffer)
+  (kill-all-local-variables)
+  (let ((inhibit-read-only t)) (erase-buffer))
+  (remove-overlays)
+  (widget-insert (format "%s — run parameters.\n\n" hcv-coda-qt-project-name))
+  (let (display document chromium)
+    (setq display (widget-create 'editable-field
+                                 :format (hcv--bold-label-format "Display:  %v")
+                                 :size 12
+                                 hcv-coda-qt-display))
+    (widget-insert "\n")
+    (setq document (widget-create 'editable-field
+                                  :format (hcv--bold-label-format "Document: %v")
+                                  :size 60
+                                  (expand-file-name "test/data/hello.odt"
+                                                    command-line-default-directory)))
+    (widget-insert "\n")
+    (setq chromium (widget-create 'editable-field
+                                  :format (hcv--bold-label-format "Chromium: %v")
+                                  :size 60
+                                  hcv-coda-qt-chromium-flags))
+    (widget-insert "\n\n")
+    (widget-create 'push-button
+                   :notify (lambda (&rest _)
+                             (hcv-coda-qt--launch (widget-value display)
+                                                  (widget-value document)
+                                                  (widget-value chromium)))
+                   "Run")
+    (widget-insert "  ")
+    (widget-create 'push-button
+                   :notify (lambda (&rest _) (kill-buffer hcv-coda-qt-buffer))
+                   "Cancel"))
+  (use-local-map widget-keymap)
+  (widget-setup)
+  (goto-char (point-min)))
+
 (transient-define-prefix hcv-main-commands ()
   "Main Commands."
   ["Buffers & Navigation"
@@ -1208,6 +1326,7 @@ configure for both projects."
    ("m" "Make"         hcv-compile-cool)
    ("k" "Clean"        hcv-clean-cool)
    ("r" "Run"          hcv-run-cool)
+   ("R" "Run coda-qt…" hcv-coda-qt :if hcv-coda-qt-available-p)
    ("L" "Log (head)"   hcv-head-config-cool)
    ("F" "Log (full)"   hcv-full-config-cool)
    ("t" "Tags: build"  hcv-tags-build-cool)
