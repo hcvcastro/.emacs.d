@@ -1220,6 +1220,40 @@ configure for both projects."
 The embedded Chromium flags are added separately from
 `hcv-coda-qt-chromium-flags' so they can be edited in the run UI.")
 
+(defcustom hcv-coda-qt-accessibility t
+  "When non-nil, the X11 Run joins the headless accessibility session (Orca).
+If a11y-start.sh's env file exists for the chosen display (see
+`hcv-coda-qt-a11y-env-file'), its D-Bus / Qt-a11y variables are exported into
+coda-qt along with CODA_RENDERER_A11Y=1, and --force-renderer-accessibility is
+added to the Chromium flags, so Orca can read the UI."
+  :type 'boolean)
+
+(defcustom hcv-coda-qt-a11y-env-file "/tmp/a11y-session%s.env"
+  "Sourceable env file written by a11y-start.sh; %s is the X display number."
+  :type 'string)
+
+(defun hcv-coda-qt--a11y-env (display)
+  "Environment entries (\"VAR=VAL\") that join the a11y session on DISPLAY, or nil.
+Reads the `export VAR=...' lines from the a11y env file for DISPLAY's number
+\(skipping DISPLAY itself, which the launcher sets) and appends CODA_RENDERER_A11Y=1.
+Returns nil when `hcv-coda-qt-accessibility' is off or the env file is absent —
+i.e. when the headless a11y stack isn't running."
+  (when hcv-coda-qt-accessibility
+    (let* ((dnum (if (string-match ":\\([0-9]+\\)" display) (match-string 1 display) "0"))
+           (file (format hcv-coda-qt-a11y-env-file dnum)))
+      (when (file-readable-p file)
+        (with-temp-buffer
+          (insert-file-contents file)
+          (goto-char (point-min))
+          (let (vars)
+            (while (re-search-forward
+                    "^[ \t]*export[ \t]+\\([A-Za-z_][A-Za-z0-9_]*\\)=\\(.*\\)$" nil t)
+              (let ((name (match-string 1))
+                    (val  (string-trim (match-string 2) "[ \t'\"]+" "[ \t'\"]+")))
+                (unless (string= name "DISPLAY")
+                  (push (concat name "=" val) vars))))
+            (nreverse (cons "CODA_RENDERER_A11Y=1" vars))))))))
+
 (defun hcv-coda-qt-binary ()
   "Path to the Qt app binary for the current COOL build."
   (expand-file-name "qt/coda-qt" hcv-cool-default-build-dir))
@@ -1328,11 +1362,17 @@ is not reachable (start the X session first)."
                       display))
     ('unknown (message "coda-qt: cannot verify display %s (no xdpyinfo/xset); launching anyway"
                        display)))
-  (hcv-coda-qt--run-cmd
-   (append (list (concat "DISPLAY=" display)
-                 (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
-           hcv-coda-qt-software-env)
-   document display))
+  (let* ((a11y (hcv-coda-qt--a11y-env display))
+         (flags (if a11y
+                    (string-trim (concat (or chromium-flags "") " --force-renderer-accessibility"))
+                  (or chromium-flags ""))))
+    (when a11y (message "coda-qt: joining accessibility session (Orca) on %s" display))
+    (hcv-coda-qt--run-cmd
+     (append (list (concat "DISPLAY=" display)
+                   (concat "QTWEBENGINE_CHROMIUM_FLAGS=" flags))
+             hcv-coda-qt-software-env
+             a11y)
+     document display)))
 
 (defun hcv-coda-qt--launch-wayland (wd document chromium-flags)
   "Launch coda-qt natively under Wayland on WAYLAND_DISPLAY WD opening DOCUMENT.
