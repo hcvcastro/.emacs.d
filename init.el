@@ -1421,14 +1421,14 @@ a Run button or just X (X11) / W (Wayland) / q (cancel)."
     ;; buffer-local widgets, persist, launch, then close the buffer (unless the
     ;; launch aborts because the display/socket was unreachable).
     (widget-create 'push-button
-                   :notify (lambda (&rest _) (hcv-coda-qt-run-x11)) "Run X11")
-    (widget-insert "  ")
-    (widget-create 'push-button
                    :notify (lambda (&rest _) (hcv-coda-qt-run-wayland)) "Run Wayland")
     (widget-insert "  ")
     (widget-create 'push-button
+                   :notify (lambda (&rest _) (hcv-coda-qt-run-x11)) "Run X11")
+    (widget-insert "  ")
+    (widget-create 'push-button
                    :notify (lambda (&rest _) (hcv-coda-qt-cancel)) "Cancel")
-    (widget-insert "\n\n(X: Run X11   W: Run Wayland   q: Cancel)"))
+    (widget-insert "\n\n(W: Run Wayland   X: Run X11   q: Cancel)"))
   (use-local-map hcv-coda-qt-map)
   (widget-setup)
   (goto-char (point-min)))
