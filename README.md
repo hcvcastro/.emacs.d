@@ -156,6 +156,39 @@ Customize: `hcv-coda-qt-display`, `hcv-coda-qt-wayland-display`,
 `hcv-coda-qt-chromium-flags`. The binary lives out-of-tree under
 `hcv-cool-default-build-dir` (`<build>/qt/coda-qt`).
 
+## Running Collabora Office (soffice)
+
+The Office submenu (`C-c c w`) entry **`r` — Run…** opens the same kind of
+buffer for the desktop `soffice.bin` (shown when the build has a `soffice.bin`):
+
+```
+Collabora Office — run parameters.
+
+Display:  :99
+Wayland:  wayland-0
+Args:     --norestore --nologo --writer
+
+[Run Wayland]  [Run X11]  [Cancel]
+
+(W: Run Wayland   X: Run X11   q: Cancel)
+```
+
+- **Run Wayland** (`W`) / **Run X11** (`X`) — same display/socket checks and
+  Wayland auto-detection as coda-qt, but soffice selects its backend through the
+  GTK VCL plugin: Wayland sets `WAYLAND_DISPLAY` + `GDK_BACKEND=wayland` +
+  `XDG_RUNTIME_DIR`; X11 sets `DISPLAY` + `GDK_BACKEND=x11`. Both export
+  `SAL_USE_VCLPLUGIN=gtk3` and force software rendering, then run
+  `<co-build>/instdir/program/soffice.bin` with the *Args* field.
+- Persists the session display/Wayland and the args (only when changed).
+
+Customize: `hcv-co-run-args` (and the shared `hcv-coda-qt-display` /
+`hcv-coda-qt-wayland-display`).
+
+**Note:** an online/LOKit build (`libmergedlo.so`, driven headless by
+`coolwsd`) ships **no VCL plugin**, so its `soffice.bin` cannot open a desktop
+window — "no muestra nada". Use a GUI build (e.g. `--enable-gtk3`) for this, or
+coda-qt for the online build.
+
 ## Files
 
 - `config.el` — the configuration itself.
