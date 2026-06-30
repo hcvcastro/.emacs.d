@@ -150,6 +150,15 @@
 
 (add-hook 'compilation-filter-hook 'hcv-ansi-colorize-buffer)
 
+(defun hcv-async-shell-command (command &optional output-buffer preview)
+  "Run COMMAND via `async-shell-command', echoing it first into the buffer.
+The echoed line is PREVIEW when given (e.g. to also show the environment a
+command runs under), otherwise COMMAND itself, so the buffer always opens
+with the exact command that is about to run."
+  (async-shell-command
+   (concat "echo " (shell-quote-argument (or preview command)) "; " command)
+   output-buffer))
+
 (defvar build-default-directory (purecopy command-line-default-directory)
   "Default directory used for build output paths.")
 
@@ -774,7 +783,7 @@ Returns non-nil if at least one option was read, nil otherwise."
   ;; --- Bootstrap autogen if the configure script is missing ---
   (if (not (file-exists-p (expand-file-name hcv-cool-configure-file
                                             (expand-file-name command-line-default-directory))))
-      (async-shell-command "./autogen.sh"))
+      (hcv-async-shell-command "./autogen.sh"))
 
   (global-set-key "\C-cc" 'hcv-main-commands))
 
@@ -996,7 +1005,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   (let ((cmd (hcv-get-shell-command (symbol-value config-list-var)
                                     source-dir build-dir configure-file)))
     (make-directory build-dir t)
-    (async-shell-command cmd)))
+    (hcv-async-shell-command cmd)))
 
 (defun hcv-execute-copy-clipboard (config-list-var source-dir build-dir configure-file)
   "Copy the configure command for the project identified by CONFIG-LIST-VAR.
@@ -1051,7 +1060,7 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
   (interactive)
   (let* ((default-cmd (concat "cd " hcv-cool-default-build-dir " && make run"))
          (cmd (read-shell-command "Run command: " default-cmd)))
-    (async-shell-command cmd)))
+    (hcv-async-shell-command cmd)))
 
 (defun hcv-run-co ()
   "Run Collabora Office (soffice.bin) from the build instdir."
@@ -1060,17 +1069,17 @@ Uses SOURCE-DIR, BUILD-DIR and CONFIGURE-FILE to build the command."
                               "instdir/program/soffice.bin"
                               " --norestore --nologo --writer"))
          (cmd (read-shell-command "Run command: " default-cmd)))
-    (async-shell-command cmd)))
+    (hcv-async-shell-command cmd)))
 
 (defun hcv-head-config-cool ()
   "Show head of config.log for COOL."
   (interactive)
-  (async-shell-command (concat "cd " hcv-cool-default-build-dir " && head config.log")))
+  (hcv-async-shell-command (concat "cd " hcv-cool-default-build-dir " && head config.log")))
 
 (defun hcv-head-config-co ()
   "Show head of config.log for Office."
   (interactive)
-  (async-shell-command (concat "cd " hcv-co-default-build-dir " && head config.log")))
+  (hcv-async-shell-command (concat "cd " hcv-co-default-build-dir " && head config.log")))
 
 (defun hcv-full-config-cool ()
   "Open the full config.log for COOL in view-mode."
@@ -1255,16 +1264,18 @@ reachable (start the X session first)."
                       display))
     ('unknown (message "coda-qt: cannot verify display %s (no xdpyinfo/xset); launching anyway"
                        display)))
-  (let* ((process-environment
-          (append (list (concat "DISPLAY=" display)
-                        (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
-                  hcv-coda-qt-software-env
-                  process-environment))
+  (let* ((env-list (append (list (concat "DISPLAY=" display)
+                                 (concat "QTWEBENGINE_CHROMIUM_FLAGS="
+                                         (or chromium-flags "")))
+                           hcv-coda-qt-software-env))
+         (process-environment (append env-list process-environment))
          (default-directory (file-name-directory (hcv-coda-qt-binary)))
-         (cmd (concat "./coda-qt"
+         (run (concat "./coda-qt"
                       (when (and document (not (string-empty-p document)))
-                        (concat " " (shell-quote-argument document))))))
-    (async-shell-command cmd (format "*coda-qt %s*" display))))
+                        (concat " " (shell-quote-argument document)))))
+         ;; Preview shows the full command with the environment it runs under.
+         (preview (concat (mapconcat #'identity env-list " ") " " run)))
+    (hcv-async-shell-command run (format "*coda-qt %s*" display) preview)))
 
 (defun hcv-coda-qt ()
   "Open a widget buffer to set coda-qt run parameters, with a Run button.
