@@ -1490,8 +1490,10 @@ a Run button or just X (X11) / W (Wayland) / q (cancel)."
 (defvar hcv-co-run-buffer "*soffice parameters*"
   "Buffer name for the Collabora Office run-parameters UI.")
 
-(defcustom hcv-co-run-args "--norestore --nologo --writer"
-  "Default soffice.bin arguments offered in the Office run UI."
+(defcustom hcv-co-run-args "--norestore --nologo"
+  "Default soffice.bin arguments in the Office run UI.
+No module flag (e.g. --writer): soffice auto-detects the module from the
+selected Document.  Add a flag yourself to force a module / open a blank doc."
   :type 'string)
 
 (defvar hcv-co-software-env
@@ -1509,20 +1511,23 @@ selects X11 vs Wayland.")
        (stringp hcv-co-default-build-dir)
        (file-executable-p (hcv-co--soffice))))
 
-(defun hcv-co--run-cmd (env-list args buffer-tag)
-  "Launch soffice.bin with ENV-LIST exported and ARGS appended.
-ARGS is a shell fragment (split by the shell).  Output streams to
-*soffice BUFFER-TAG* with the command echoed."
+(defun hcv-co--run-cmd (env-list args document buffer-tag)
+  "Launch soffice.bin with ENV-LIST exported, ARGS and DOCUMENT appended.
+ARGS is a shell fragment (split by the shell); DOCUMENT, when non-empty, is
+the file soffice opens.  Output streams to *soffice BUFFER-TAG* (command echoed)."
   (let* ((soffice (hcv-co--soffice))
          (process-environment (append env-list process-environment))
          (default-directory (file-name-directory soffice))
          (run (concat (shell-quote-argument soffice)
-                      (if (and args (not (string-empty-p args))) (concat " " args) "")))
+                      (if (and args (not (string-empty-p args))) (concat " " args) "")
+                      (if (and document (not (string-empty-p document)))
+                          (concat " " (shell-quote-argument document)) "")))
          (preview (concat (mapconcat #'identity env-list " ") " " run)))
     (hcv-async-shell-command run (format "*soffice %s*" buffer-tag) preview)))
 
-(defun hcv-co--launch-x11 (display args)
-  "Launch soffice under X11 on DISPLAY with ARGS.  Aborts if unreachable."
+(defun hcv-co--launch-x11 (display args document)
+  "Launch soffice under X11 on DISPLAY with ARGS opening DOCUMENT.
+Aborts if the display is unreachable."
   (pcase (hcv-coda-qt--display-connects-p display)
     ('nil (user-error "Display %s is not reachable — start the X session first"
                       display))
@@ -1530,32 +1535,35 @@ ARGS is a shell fragment (split by the shell).  Output streams to
                        display)))
   (hcv-co--run-cmd (append (list (concat "DISPLAY=" display) "GDK_BACKEND=x11")
                            hcv-co-software-env)
-                   args display))
+                   args document display))
 
-(defun hcv-co--launch-wayland (wd args)
-  "Launch soffice natively under Wayland on WAYLAND_DISPLAY WD with ARGS."
+(defun hcv-co--launch-wayland (wd args document)
+  "Launch soffice natively under Wayland on WAYLAND_DISPLAY WD with ARGS opening DOCUMENT."
   (unless (hcv-coda-qt--wayland-reachable-p wd)
     (user-error "Wayland socket %s not found in %s — start the Wayland session first"
                 wd (hcv-coda-qt--runtime-dir)))
   (hcv-co--run-cmd (append (list (concat "WAYLAND_DISPLAY=" wd) "GDK_BACKEND=wayland"
                                  (concat "XDG_RUNTIME_DIR=" (hcv-coda-qt--runtime-dir)))
                            hcv-co-software-env)
-                   args (concat "wl " wd)))
+                   args document (concat "wl " wd)))
 
-(defun hcv-co--remember (display wayland args)
-  "Persist the session DISPLAY/WAYLAND and soffice ARGS (only when changed)."
+(defun hcv-co--remember (display wayland args document)
+  "Persist the session DISPLAY/WAYLAND, soffice ARGS and DOCUMENT (when changed).
+The document is shared with coda-qt (`hcv-coda-qt-document')."
   (unless (equal display hcv-coda-qt-display)
     (customize-save-variable 'hcv-coda-qt-display display))
   (unless (equal wayland hcv-coda-qt-wayland-display)
     (customize-save-variable 'hcv-coda-qt-wayland-display wayland))
   (unless (equal args hcv-co-run-args)
-    (customize-save-variable 'hcv-co-run-args args)))
+    (customize-save-variable 'hcv-co-run-args args))
+  (unless (equal document hcv-coda-qt-document)
+    (customize-save-variable 'hcv-coda-qt-document document)))
 
 (defvar-local hcv-co--widgets nil
   "Plist of the run-parameter widgets in the current soffice buffer.")
 
 (defun hcv-co--field (key)
-  "Current value of soffice run widget KEY (:display/:wayland/:args)."
+  "Current value of soffice run widget KEY (:display/:wayland/:args/:document)."
   (widget-value (plist-get hcv-co--widgets key)))
 
 (defun hcv-co--do-run (platform)
@@ -1563,11 +1571,12 @@ ARGS is a shell fragment (split by the shell).  Output streams to
 (unless the launch aborted)."
   (let ((d (hcv-co--field :display))
         (wl (hcv-co--field :wayland))
-        (args (hcv-co--field :args)))
-    (hcv-co--remember d wl args)
+        (args (hcv-co--field :args))
+        (doc (hcv-co--field :document)))
+    (hcv-co--remember d wl args doc)
     (if (eq platform 'wayland)
-        (hcv-co--launch-wayland wl args)
-      (hcv-co--launch-x11 d args))
+        (hcv-co--launch-wayland wl args doc)
+      (hcv-co--launch-x11 d args doc))
     (when (get-buffer hcv-co-run-buffer) (kill-buffer hcv-co-run-buffer))))
 
 (defun hcv-co-run-x11 ()
@@ -1602,7 +1611,7 @@ Edit the fields if needed, then press a Run button or just X / W / q."
   (let ((inhibit-read-only t)) (erase-buffer))
   (remove-overlays)
   (widget-insert "Collabora Office — run parameters.\n\n")
-  (let (display wayland args)
+  (let (display wayland args document radio)
     (setq display (widget-create 'editable-field
                                  :format (hcv--bold-label-format "Display:  %v")
                                  :size 12 hcv-coda-qt-display))
@@ -1616,7 +1625,34 @@ Edit the fields if needed, then press a Run button or just X / W / q."
     (setq args (widget-create 'editable-field
                               :format (hcv--bold-label-format "Args:     %v")
                               :size 60 hcv-co-run-args))
-    (setq hcv-co--widgets (list :display display :wayland wayland :args args))
+    (widget-insert "\n")
+    ;; Document field + example radios (shared with coda-qt). Empty = none
+    ;; (soffice opens whatever Args implies, e.g. a blank --writer).
+    (let* ((examples (hcv-coda-qt--examples))
+           (hello (expand-file-name "test/data/hello.odt" command-line-default-directory))
+           (doc-default (or (and (stringp hcv-coda-qt-document)
+                                 (not (string-empty-p hcv-coda-qt-document))
+                                 hcv-coda-qt-document)
+                            (car (member hello examples))
+                            (car examples)
+                            "")))
+      (setq document (widget-create 'editable-field
+                                    :format (hcv--bold-label-format "Document: %v")
+                                    :size 60 doc-default))
+      (widget-insert "\n")
+      (when examples
+        (setq radio
+              (apply #'widget-create 'radio-button-choice
+                     :value (if (member doc-default examples) doc-default (car examples))
+                     :indent 10
+                     :notify (lambda (w &rest _)
+                               (when (stringp (widget-value w))
+                                 (widget-value-set document (widget-value w))))
+                     (mapcar (lambda (f)
+                               (list 'item :tag (file-name-nondirectory f) :value f))
+                             examples)))))
+    (setq hcv-co--widgets (list :display display :wayland wayland :args args
+                                :document document :examples-radio radio))
     (widget-insert "\n\n")
     (widget-create 'push-button
                    :notify (lambda (&rest _) (hcv-co-run-wayland)) "Run Wayland")

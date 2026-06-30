@@ -166,7 +166,8 @@ Collabora Office — run parameters.
 
 Display:  :99
 Wayland:  wayland-0
-Args:     --norestore --nologo --writer
+Args:     --norestore --nologo
+Document: <worktree>/test/data/hello.odt
 
 [Run Wayland]  [Run X11]  [Cancel]
 
@@ -178,11 +179,15 @@ Args:     --norestore --nologo --writer
   GTK VCL plugin: Wayland sets `WAYLAND_DISPLAY` + `GDK_BACKEND=wayland` +
   `XDG_RUNTIME_DIR`; X11 sets `DISPLAY` + `GDK_BACKEND=x11`. Both export
   `SAL_USE_VCLPLUGIN=gtk3` and force software rendering, then run
-  `<co-build>/instdir/program/soffice.bin` with the *Args* field.
-- Persists the session display/Wayland and the args (only when changed).
+  `<co-build>/instdir/program/soffice.bin <Args> <Document>`.
+- *Document* has the same example radios as coda-qt (shared
+  `hcv-coda-qt--examples`); the default *Args* carry no module flag, so soffice
+  auto-detects the module from the selected document.
+- Persists the session display/Wayland, the args and the document (only when
+  changed; the document is shared with coda-qt via `hcv-coda-qt-document`).
 
 Customize: `hcv-co-run-args` (and the shared `hcv-coda-qt-display` /
-`hcv-coda-qt-wayland-display`).
+`hcv-coda-qt-wayland-display` / `hcv-coda-qt-document`).
 
 **Note:** an online/LOKit build (`libmergedlo.so`, driven headless by
 `coolwsd`) ships **no VCL plugin**, so its `soffice.bin` cannot open a desktop
