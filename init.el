@@ -1254,40 +1254,84 @@ Returns t/nil via xdpyinfo (or xset as a fallback); returns the symbol
     (eq 0 (call-process "xset" nil nil nil "-display" display "q")))
    (t 'unknown)))
 
+(defcustom hcv-coda-qt-wayland-display "wayland-1"
+  "WAYLAND_DISPLAY the coda-qt run UI starts with for the native-Wayland Run."
+  :type 'string)
+
+(defun hcv-coda-qt--runtime-dir ()
+  "XDG_RUNTIME_DIR, used to locate the Wayland socket."
+  (or (getenv "XDG_RUNTIME_DIR") (format "/run/user/%d" (user-uid))))
+
+(defun hcv-coda-qt--wayland-reachable-p (wd)
+  "Non-nil if the Wayland socket WD exists under XDG_RUNTIME_DIR."
+  (file-exists-p (expand-file-name wd (hcv-coda-qt--runtime-dir))))
+
+(defun hcv-coda-qt--detect-wayland ()
+  "Name of a running Wayland session's socket under XDG_RUNTIME_DIR, or nil.
+wlroots auto-picks wayland-N, so detect it rather than assume.  Prefers a
+socket other than Emacs's own WAYLAND_DISPLAY (e.g. the headless labwc one)."
+  (let* ((dir  (hcv-coda-qt--runtime-dir))
+         (self (getenv "WAYLAND_DISPLAY"))
+         (socks (and (file-directory-p dir)
+                     (seq-filter (lambda (f) (string-match-p "\\`wayland-[0-9]+\\'" f))
+                                 (directory-files dir)))))
+    (or (seq-find (lambda (s) (not (equal s self))) socks)
+        (car socks))))
+
+(defun hcv-coda-qt--run-cmd (env-list document buffer-tag)
+  "Launch the current build's Qt app with ENV-LIST exported, opening DOCUMENT.
+Output streams to *coda-qt BUFFER-TAG*.  cwd = the build's qt/ dir (coda-qt
+loads resources relative to it); the binary is invoked by absolute path since
+it lives out-of-tree under the build dir.  Forces software rendering via
+ENV-LIST.  The async buffer opens with the exact command and environment."
+  (let* ((process-environment (append env-list process-environment))
+         (default-directory (file-name-directory (hcv-coda-qt-binary)))
+         (run (concat (shell-quote-argument (hcv-coda-qt-binary))
+                      (when (and document (not (string-empty-p document)))
+                        (concat " " (shell-quote-argument document)))))
+         (preview (concat (mapconcat #'identity env-list " ") " " run)))
+    (hcv-async-shell-command run (format "*coda-qt %s*" buffer-tag) preview)))
+
 (defun hcv-coda-qt--launch (display document chromium-flags)
-  "Launch the current build's Qt app on DISPLAY opening DOCUMENT.
-CHROMIUM-FLAGS is exported as QTWEBENGINE_CHROMIUM_FLAGS.  Forces software
-rendering; output streams to the async buffer.  Aborts if DISPLAY is not
-reachable (start the X session first)."
+  "Launch coda-qt under X11 on DISPLAY opening DOCUMENT.
+CHROMIUM-FLAGS is exported as QTWEBENGINE_CHROMIUM_FLAGS.  Aborts if DISPLAY
+is not reachable (start the X session first)."
   (pcase (hcv-coda-qt--display-connects-p display)
     ('nil (user-error "Display %s is not reachable — start the X session first"
                       display))
     ('unknown (message "coda-qt: cannot verify display %s (no xdpyinfo/xset); launching anyway"
                        display)))
-  (let* ((env-list (append (list (concat "DISPLAY=" display)
-                                 (concat "QTWEBENGINE_CHROMIUM_FLAGS="
-                                         (or chromium-flags "")))
-                           hcv-coda-qt-software-env))
-         (process-environment (append env-list process-environment))
-         ;; cwd = the build's qt/ dir (coda-qt loads resources relative to it),
-         ;; but invoke it by absolute path since the binary lives out-of-tree
-         ;; under the build dir, not in the source worktree.
-         (default-directory (file-name-directory (hcv-coda-qt-binary)))
-         (run (concat (shell-quote-argument (hcv-coda-qt-binary))
-                      (when (and document (not (string-empty-p document)))
-                        (concat " " (shell-quote-argument document)))))
-         ;; Preview shows the full command with the environment it runs under.
-         (preview (concat (mapconcat #'identity env-list " ") " " run)))
-    (hcv-async-shell-command run (format "*coda-qt %s*" display) preview)))
+  (hcv-coda-qt--run-cmd
+   (append (list (concat "DISPLAY=" display)
+                 (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
+           hcv-coda-qt-software-env)
+   document display))
 
-(defun hcv-coda-qt--remember (display chromium-flags)
-  "Persist DISPLAY and CHROMIUM-FLAGS for future runs and sessions.
+(defun hcv-coda-qt--launch-wayland (wd document chromium-flags)
+  "Launch coda-qt natively under Wayland on WAYLAND_DISPLAY WD opening DOCUMENT.
+Sets QT_QPA_PLATFORM=wayland.  Aborts if the Wayland socket is absent
+(start the Wayland session first)."
+  (unless (hcv-coda-qt--wayland-reachable-p wd)
+    (user-error "Wayland socket %s not found in %s — start the Wayland session first"
+                wd (hcv-coda-qt--runtime-dir)))
+  (hcv-coda-qt--run-cmd
+   (append (list (concat "WAYLAND_DISPLAY=" wd)
+                 "QT_QPA_PLATFORM=wayland"
+                 (concat "XDG_RUNTIME_DIR=" (hcv-coda-qt--runtime-dir))
+                 (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
+           hcv-coda-qt-software-env)
+   document (concat "wl " wd)))
+
+(defun hcv-coda-qt--remember (display wayland chromium-flags)
+  "Persist DISPLAY, WAYLAND and CHROMIUM-FLAGS for future runs and sessions.
 Only the values that actually changed are saved, so `custom-file' is not
 rewritten when nothing was edited.  Saved through Customize, so the
 generic defaults stay in this file and your personal choices live in your
 customizations.  The document is left per-worktree (re-derived each time)."
   (unless (equal display hcv-coda-qt-display)
     (customize-save-variable 'hcv-coda-qt-display display))
+  (unless (equal wayland hcv-coda-qt-wayland-display)
+    (customize-save-variable 'hcv-coda-qt-wayland-display wayland))
   (unless (equal chromium-flags hcv-coda-qt-chromium-flags)
     (customize-save-variable 'hcv-coda-qt-chromium-flags chromium-flags)))
 
@@ -1300,11 +1344,17 @@ Modeled on the Collabora configure UI: edit the fields, then press Run."
   (let ((inhibit-read-only t)) (erase-buffer))
   (remove-overlays)
   (widget-insert (format "%s — run parameters.\n\n" hcv-coda-qt-project-name))
-  (let (display document chromium)
+  (let (display wayland document chromium)
     (setq display (widget-create 'editable-field
                                  :format (hcv--bold-label-format "Display:  %v")
                                  :size 12
                                  hcv-coda-qt-display))
+    (widget-insert "\n")
+    (setq wayland (widget-create 'editable-field
+                                 :format (hcv--bold-label-format "Wayland:  %v")
+                                 :size 12
+                                 (or (hcv-coda-qt--detect-wayland)
+                                     hcv-coda-qt-wayland-display)))
     (widget-insert "\n")
     (setq document (widget-create 'editable-field
                                   :format (hcv--bold-label-format "Document: %v")
@@ -1317,18 +1367,31 @@ Modeled on the Collabora configure UI: edit the fields, then press Run."
                                   :size 60
                                   hcv-coda-qt-chromium-flags))
     (widget-insert "\n\n")
+    ;; Reached only if the launch didn't abort (e.g. the display/socket was
+    ;; unreachable): close the params buffer.
     (widget-create 'push-button
                    :notify (lambda (&rest _)
                              (let ((d (widget-value display))
+                                   (wl (widget-value wayland))
                                    (doc (widget-value document))
                                    (c (widget-value chromium)))
-                               (hcv-coda-qt--remember d c)
+                               (hcv-coda-qt--remember d wl c)
                                (hcv-coda-qt--launch d doc c)
-                               ;; Reached only if launch didn't abort (e.g. the
-                               ;; display was unreachable): close the params buffer.
                                (when (get-buffer hcv-coda-qt-buffer)
                                  (kill-buffer hcv-coda-qt-buffer))))
-                   "Run")
+                   "Run X11")
+    (widget-insert "  ")
+    (widget-create 'push-button
+                   :notify (lambda (&rest _)
+                             (let ((d (widget-value display))
+                                   (wl (widget-value wayland))
+                                   (doc (widget-value document))
+                                   (c (widget-value chromium)))
+                               (hcv-coda-qt--remember d wl c)
+                               (hcv-coda-qt--launch-wayland wl doc c)
+                               (when (get-buffer hcv-coda-qt-buffer)
+                                 (kill-buffer hcv-coda-qt-buffer))))
+                   "Run Wayland")
     (widget-insert "  ")
     (widget-create 'push-button
                    :notify (lambda (&rest _) (kill-buffer hcv-coda-qt-buffer))
