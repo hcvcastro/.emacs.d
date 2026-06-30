@@ -1280,6 +1280,17 @@ reachable (start the X session first)."
          (preview (concat (mapconcat #'identity env-list " ") " " run)))
     (hcv-async-shell-command run (format "*coda-qt %s*" display) preview)))
 
+(defun hcv-coda-qt--remember (display chromium-flags)
+  "Persist DISPLAY and CHROMIUM-FLAGS for future runs and sessions.
+Only the values that actually changed are saved, so `custom-file' is not
+rewritten when nothing was edited.  Saved through Customize, so the
+generic defaults stay in this file and your personal choices live in your
+customizations.  The document is left per-worktree (re-derived each time)."
+  (unless (equal display hcv-coda-qt-display)
+    (customize-save-variable 'hcv-coda-qt-display display))
+  (unless (equal chromium-flags hcv-coda-qt-chromium-flags)
+    (customize-save-variable 'hcv-coda-qt-chromium-flags chromium-flags)))
+
 (defun hcv-coda-qt ()
   "Open a widget buffer to set coda-qt run parameters, with a Run button.
 Modeled on the Collabora configure UI: edit the fields, then press Run."
@@ -1308,9 +1319,15 @@ Modeled on the Collabora configure UI: edit the fields, then press Run."
     (widget-insert "\n\n")
     (widget-create 'push-button
                    :notify (lambda (&rest _)
-                             (hcv-coda-qt--launch (widget-value display)
-                                                  (widget-value document)
-                                                  (widget-value chromium)))
+                             (let ((d (widget-value display))
+                                   (doc (widget-value document))
+                                   (c (widget-value chromium)))
+                               (hcv-coda-qt--remember d c)
+                               (hcv-coda-qt--launch d doc c)
+                               ;; Reached only if launch didn't abort (e.g. the
+                               ;; display was unreachable): close the params buffer.
+                               (when (get-buffer hcv-coda-qt-buffer)
+                                 (kill-buffer hcv-coda-qt-buffer))))
                    "Run")
     (widget-insert "  ")
     (widget-create 'push-button
