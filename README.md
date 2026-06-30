@@ -118,6 +118,44 @@ At interactive time:
 5. User presses "Copy" button → command placed in clipboard to paste in shell.
    Or "Configure" button → command runs via `async-shell-command`.
 
+## Running coda-qt (the Qt app)
+
+When the current COOL build is configured or built with `--enable-qtapp`, the
+Online submenu (`C-c c o`) gains **`R` — Run coda-qt…**. It opens a widget
+buffer (like the configure UI) with the run parameters, then launches
+`<build>/qt/coda-qt` and streams its output — with the exact command echoed on
+the first line — into a `*coda-qt …*` async buffer.
+
+```
+coda-qt — run parameters.
+
+Display:  :99
+Wayland:  wayland-0
+Document: <worktree>/test/data/hello.odt
+Chromium: --disable-gpu --disable-gpu-compositing --disable-software-rasterizer --no-sandbox
+
+[Run Wayland]  [Run X11]  [Cancel]
+
+(W: Run Wayland   X: Run X11   q: Cancel)
+```
+
+- **Run Wayland** (`W`) — runs natively under Wayland: sets `WAYLAND_DISPLAY`
+  (the *Wayland* field), `QT_QPA_PLATFORM=wayland` and `XDG_RUNTIME_DIR`, and
+  aborts if that Wayland socket isn't present (start the Wayland session first).
+  The *Wayland* field **auto-detects** the running compositor's `wayland-N`
+  socket (wlroots auto-picks the name), preferring one other than Emacs's own.
+- **Run X11** (`X`) — sets `DISPLAY` to the *Display* field and first checks the
+  display is reachable (`xdpyinfo`/`xset`), aborting otherwise.
+- Both force software rendering (no GPU) and export the editable
+  `QTWEBENGINE_CHROMIUM_FLAGS`. The single-key `W`/`X`/`q` shortcuts work outside
+  the fields (inside a field those letters type normally).
+- The *Display*, *Wayland* and Chromium-flags values persist across sessions via
+  Customize (only when changed); the document stays per-worktree.
+
+Customize: `hcv-coda-qt-display`, `hcv-coda-qt-wayland-display`,
+`hcv-coda-qt-chromium-flags`. The binary lives out-of-tree under
+`hcv-cool-default-build-dir` (`<build>/qt/coda-qt`).
+
 ## Files
 
 - `config.el` — the configuration itself.
@@ -188,6 +226,7 @@ Inside `o` or `w`:
 | `c`       | Configure (widget buffer)    |
 | `m`       | Make                         |
 | `r`       | Run                          |
+| `R`       | Run coda-qt… (COOL, if `--enable-qtapp`) |
 | `L`       | Log (head of config.log)     |
 | `t`       | Tags: build (`make tags`)    |
 | `T`       | Tags: load (set tags-table-list) |
