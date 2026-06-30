@@ -1278,6 +1278,33 @@ socket other than Emacs's own WAYLAND_DISPLAY (e.g. the headless labwc one)."
     (or (seq-find (lambda (s) (not (equal s self))) socks)
         (car socks))))
 
+(defcustom hcv-coda-qt-examples-dir "test/samples"
+  "Directory of example documents offered in the run UI's Document radio.
+Relative to the worktree (`command-line-default-directory') unless absolute."
+  :type 'string)
+
+(defcustom hcv-coda-qt-extra-examples '("test/data/hello.odt")
+  "Extra example documents for the radio, added after those in
+`hcv-coda-qt-examples-dir'.  Each is relative to the worktree unless absolute."
+  :type '(repeat string))
+
+(defcustom hcv-coda-qt-document nil
+  "Last document chosen in the run UI, persisted across sessions.
+nil means fall back to the first example."
+  :type '(choice (const :tag "First example" nil) string))
+
+(defun hcv-coda-qt--examples ()
+  "Absolute paths of example documents: those under `hcv-coda-qt-examples-dir'
+plus `hcv-coda-qt-extra-examples' (existing files only)."
+  (let* ((dir (expand-file-name hcv-coda-qt-examples-dir command-line-default-directory))
+         (from-dir (when (file-directory-p dir)
+                     (seq-filter #'file-regular-p (directory-files dir t "\\`[^.]"))))
+         (extra (seq-filter
+                 #'file-exists-p
+                 (mapcar (lambda (f) (expand-file-name f command-line-default-directory))
+                         hcv-coda-qt-extra-examples))))
+    (append from-dir extra)))
+
 (defun hcv-coda-qt--run-cmd (env-list document buffer-tag)
   "Launch the current build's Qt app with ENV-LIST exported, opening DOCUMENT.
 Output streams to *coda-qt BUFFER-TAG*.  cwd = the build's qt/ dir (coda-qt
@@ -1322,16 +1349,17 @@ Sets QT_QPA_PLATFORM=wayland.  Aborts if the Wayland socket is absent
            hcv-coda-qt-software-env)
    document (concat "wl " wd)))
 
-(defun hcv-coda-qt--remember (display wayland chromium-flags)
-  "Persist DISPLAY, WAYLAND and CHROMIUM-FLAGS for future runs and sessions.
+(defun hcv-coda-qt--remember (display wayland document chromium-flags)
+  "Persist DISPLAY, WAYLAND, DOCUMENT and CHROMIUM-FLAGS for future sessions.
 Only the values that actually changed are saved, so `custom-file' is not
-rewritten when nothing was edited.  Saved through Customize, so the
-generic defaults stay in this file and your personal choices live in your
-customizations.  The document is left per-worktree (re-derived each time)."
+rewritten when nothing was edited.  Saved through Customize, so the generic
+defaults stay in this file and your personal choices live in your customizations."
   (unless (equal display hcv-coda-qt-display)
     (customize-save-variable 'hcv-coda-qt-display display))
   (unless (equal wayland hcv-coda-qt-wayland-display)
     (customize-save-variable 'hcv-coda-qt-wayland-display wayland))
+  (unless (equal document hcv-coda-qt-document)
+    (customize-save-variable 'hcv-coda-qt-document document))
   (unless (equal chromium-flags hcv-coda-qt-chromium-flags)
     (customize-save-variable 'hcv-coda-qt-chromium-flags chromium-flags)))
 
@@ -1349,7 +1377,7 @@ close the params buffer (unless the launch aborted — unreachable target)."
         (wl (hcv-coda-qt--field :wayland))
         (doc (hcv-coda-qt--field :document))
         (c (hcv-coda-qt--field :chromium)))
-    (hcv-coda-qt--remember d wl c)
+    (hcv-coda-qt--remember d wl doc c)
     (if (eq platform 'wayland)
         (hcv-coda-qt--launch-wayland wl doc c)
       (hcv-coda-qt--launch d doc c))
@@ -1391,7 +1419,7 @@ a Run button or just X (X11) / W (Wayland) / q (cancel)."
   (let ((inhibit-read-only t)) (erase-buffer))
   (remove-overlays)
   (widget-insert (format "%s — run parameters.\n\n" hcv-coda-qt-project-name))
-  (let (display wayland document chromium)
+  (let (display wayland document chromium radio)
     (setq display (widget-create 'editable-field
                                  :format (hcv--bold-label-format "Display:  %v")
                                  :size 12
@@ -1403,19 +1431,40 @@ a Run button or just X (X11) / W (Wayland) / q (cancel)."
                                  (or (hcv-coda-qt--detect-wayland)
                                      hcv-coda-qt-wayland-display)))
     (widget-insert "\n")
-    (setq document (widget-create 'editable-field
-                                  :format (hcv--bold-label-format "Document: %v")
-                                  :size 60
-                                  (expand-file-name "test/data/hello.odt"
-                                                    command-line-default-directory)))
+    (let* ((examples (hcv-coda-qt--examples))
+           (hello (expand-file-name "test/data/hello.odt" command-line-default-directory))
+           ;; persisted choice, else hello.odt if available, else the first example.
+           (doc-default (or (and (stringp hcv-coda-qt-document)
+                                 (not (string-empty-p hcv-coda-qt-document))
+                                 hcv-coda-qt-document)
+                            (car (member hello examples))
+                            (car examples))))
+      (setq document (widget-create 'editable-field
+                                    :format (hcv--bold-label-format "Document: %v")
+                                    :size 60
+                                    doc-default))
+      (widget-insert "\n")
+      ;; Example documents; picking one fills the Document field above. The
+      ;; field stays the source of truth, so you can also type any other path.
+      (when examples
+        (setq radio
+              (apply #'widget-create 'radio-button-choice
+                     :value (if (member doc-default examples) doc-default (car examples))
+                     :indent 10
+                     :notify (lambda (w &rest _)
+                               (when (stringp (widget-value w))
+                                 (widget-value-set document (widget-value w))))
+                     (mapcar (lambda (f)
+                               (list 'item :tag (file-name-nondirectory f) :value f))
+                             examples)))))
     (widget-insert "\n")
     (setq chromium (widget-create 'editable-field
                                   :format (hcv--bold-label-format "Chromium: %v")
                                   :size 60
                                   hcv-coda-qt-chromium-flags))
     (setq hcv-coda-qt--widgets
-          (list :display display :wayland wayland
-                :document document :chromium chromium))
+          (list :display display :wayland wayland :document document
+                :chromium chromium :examples-radio radio))
     (widget-insert "\n\n")
     ;; Buttons and shortcuts both go through the run commands, which read the
     ;; buffer-local widgets, persist, launch, then close the buffer (unless the
