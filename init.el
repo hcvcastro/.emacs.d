@@ -1269,8 +1269,11 @@ reachable (start the X session first)."
                                          (or chromium-flags "")))
                            hcv-coda-qt-software-env))
          (process-environment (append env-list process-environment))
+         ;; cwd = the build's qt/ dir (coda-qt loads resources relative to it),
+         ;; but invoke it by absolute path since the binary lives out-of-tree
+         ;; under the build dir, not in the source worktree.
          (default-directory (file-name-directory (hcv-coda-qt-binary)))
-         (run (concat "./coda-qt"
+         (run (concat (shell-quote-argument (hcv-coda-qt-binary))
                       (when (and document (not (string-empty-p document)))
                         (concat " " (shell-quote-argument document)))))
          ;; Preview shows the full command with the environment it runs under.
