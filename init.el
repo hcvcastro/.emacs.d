@@ -1335,9 +1335,56 @@ customizations.  The document is left per-worktree (re-derived each time)."
   (unless (equal chromium-flags hcv-coda-qt-chromium-flags)
     (customize-save-variable 'hcv-coda-qt-chromium-flags chromium-flags)))
 
+(defvar-local hcv-coda-qt--widgets nil
+  "Plist of the run-parameter widgets in the current coda-qt buffer.")
+
+(defun hcv-coda-qt--field (key)
+  "Current value of run-parameter widget KEY (:display/:wayland/:document/:chromium)."
+  (widget-value (plist-get hcv-coda-qt--widgets key)))
+
+(defun hcv-coda-qt--do-run (platform)
+  "Persist the fields, launch coda-qt for PLATFORM (`x11' or `wayland'), then
+close the params buffer (unless the launch aborted — unreachable target)."
+  (let ((d (hcv-coda-qt--field :display))
+        (wl (hcv-coda-qt--field :wayland))
+        (doc (hcv-coda-qt--field :document))
+        (c (hcv-coda-qt--field :chromium)))
+    (hcv-coda-qt--remember d wl c)
+    (if (eq platform 'wayland)
+        (hcv-coda-qt--launch-wayland wl doc c)
+      (hcv-coda-qt--launch d doc c))
+    (when (get-buffer hcv-coda-qt-buffer)
+      (kill-buffer hcv-coda-qt-buffer))))
+
+(defun hcv-coda-qt-run-x11 ()
+  "Run coda-qt under X11 from the params buffer."
+  (interactive) (hcv-coda-qt--do-run 'x11))
+
+(defun hcv-coda-qt-run-wayland ()
+  "Run coda-qt natively under Wayland from the params buffer."
+  (interactive) (hcv-coda-qt--do-run 'wayland))
+
+(defun hcv-coda-qt-cancel ()
+  "Close the coda-qt params buffer without launching."
+  (interactive) (when (get-buffer hcv-coda-qt-buffer) (kill-buffer hcv-coda-qt-buffer)))
+
+(defvar hcv-coda-qt-map
+  (let ((m (make-sparse-keymap)))
+    (set-keymap-parent m widget-keymap)
+    (define-key m "x" #'hcv-coda-qt-run-x11)
+    (define-key m "X" #'hcv-coda-qt-run-x11)
+    (define-key m "w" #'hcv-coda-qt-run-wayland)
+    (define-key m "W" #'hcv-coda-qt-run-wayland)
+    (define-key m "q" #'hcv-coda-qt-cancel)
+    m)
+  "Keymap for the coda-qt params buffer: single-key X / W / q run shortcuts.
+Active when point is not inside an editable field (where those letters type
+normally); the buffer opens with point outside the fields.")
+
 (defun hcv-coda-qt ()
-  "Open a widget buffer to set coda-qt run parameters, with a Run button.
-Modeled on the Collabora configure UI: edit the fields, then press Run."
+  "Open a widget buffer to set coda-qt run parameters, with Run buttons.
+Modeled on the Collabora configure UI: edit the fields if needed, then press
+a Run button or just X (X11) / W (Wayland) / q (cancel)."
   (interactive)
   (switch-to-buffer hcv-coda-qt-buffer)
   (kill-all-local-variables)
@@ -1366,37 +1413,23 @@ Modeled on the Collabora configure UI: edit the fields, then press Run."
                                   :format (hcv--bold-label-format "Chromium: %v")
                                   :size 60
                                   hcv-coda-qt-chromium-flags))
+    (setq hcv-coda-qt--widgets
+          (list :display display :wayland wayland
+                :document document :chromium chromium))
     (widget-insert "\n\n")
-    ;; Reached only if the launch didn't abort (e.g. the display/socket was
-    ;; unreachable): close the params buffer.
+    ;; Buttons and shortcuts both go through the run commands, which read the
+    ;; buffer-local widgets, persist, launch, then close the buffer (unless the
+    ;; launch aborts because the display/socket was unreachable).
     (widget-create 'push-button
-                   :notify (lambda (&rest _)
-                             (let ((d (widget-value display))
-                                   (wl (widget-value wayland))
-                                   (doc (widget-value document))
-                                   (c (widget-value chromium)))
-                               (hcv-coda-qt--remember d wl c)
-                               (hcv-coda-qt--launch d doc c)
-                               (when (get-buffer hcv-coda-qt-buffer)
-                                 (kill-buffer hcv-coda-qt-buffer))))
-                   "Run X11")
+                   :notify (lambda (&rest _) (hcv-coda-qt-run-x11)) "Run X11")
     (widget-insert "  ")
     (widget-create 'push-button
-                   :notify (lambda (&rest _)
-                             (let ((d (widget-value display))
-                                   (wl (widget-value wayland))
-                                   (doc (widget-value document))
-                                   (c (widget-value chromium)))
-                               (hcv-coda-qt--remember d wl c)
-                               (hcv-coda-qt--launch-wayland wl doc c)
-                               (when (get-buffer hcv-coda-qt-buffer)
-                                 (kill-buffer hcv-coda-qt-buffer))))
-                   "Run Wayland")
+                   :notify (lambda (&rest _) (hcv-coda-qt-run-wayland)) "Run Wayland")
     (widget-insert "  ")
     (widget-create 'push-button
-                   :notify (lambda (&rest _) (kill-buffer hcv-coda-qt-buffer))
-                   "Cancel"))
-  (use-local-map widget-keymap)
+                   :notify (lambda (&rest _) (hcv-coda-qt-cancel)) "Cancel")
+    (widget-insert "\n\n(X: Run X11   W: Run Wayland   q: Cancel)"))
+  (use-local-map hcv-coda-qt-map)
   (widget-setup)
   (goto-char (point-min)))
 
