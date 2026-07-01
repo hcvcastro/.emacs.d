@@ -1211,6 +1211,13 @@ configure for both projects."
   "Flags passed to the embedded Chromium via QTWEBENGINE_CHROMIUM_FLAGS."
   :type 'string)
 
+(defcustom hcv-coda-qt-debug-port 9222
+  "Chromium remote-debugging port used by the coda-qt \"Debug\" run commands.
+They set QTWEBENGINE_REMOTE_DEBUGGING to this and add --remote-allow-origins=*
+to the Chromium flags (required on Chromium >=111 / Qt 6.5); then connect Chrome
+DevTools to http://127.0.0.1:PORT (from a PC, tunnel it with coda-qt-devtools.sh)."
+  :type 'integer)
+
 (defvar hcv-coda-qt-software-env
   '("LIBGL_ALWAYS_SOFTWARE=1"
     "QT_QUICK_BACKEND=software"
@@ -1353,41 +1360,58 @@ ENV-LIST.  The async buffer opens with the exact command and environment."
          (preview (concat (mapconcat #'identity env-list " ") " " run)))
     (hcv-async-shell-command run (format "*coda-qt %s*" buffer-tag) preview)))
 
-(defun hcv-coda-qt--launch (display document chromium-flags)
+(defun hcv-coda-qt--launch (display document chromium-flags &optional debug)
   "Launch coda-qt under X11 on DISPLAY opening DOCUMENT.
-CHROMIUM-FLAGS is exported as QTWEBENGINE_CHROMIUM_FLAGS.  Aborts if DISPLAY
-is not reachable (start the X session first)."
+CHROMIUM-FLAGS is exported as QTWEBENGINE_CHROMIUM_FLAGS.  With DEBUG non-nil,
+enable Chromium remote debugging (QTWEBENGINE_REMOTE_DEBUGGING +
+--remote-allow-origins=*).  Aborts if DISPLAY is not reachable (start the X
+session first)."
   (pcase (hcv-coda-qt--display-connects-p display)
     ('nil (user-error "Display %s is not reachable — start the X session first"
                       display))
     ('unknown (message "coda-qt: cannot verify display %s (no xdpyinfo/xset); launching anyway"
                        display)))
   (let* ((a11y (hcv-coda-qt--a11y-env display))
-         (flags (if a11y
-                    (string-trim (concat (or chromium-flags "") " --force-renderer-accessibility"))
-                  (or chromium-flags ""))))
+         (flags (string-trim
+                 (concat (or chromium-flags "")
+                         (when a11y " --force-renderer-accessibility")
+                         (when debug " --remote-allow-origins=*"))))
+         (dbg (when debug
+                (list (format "QTWEBENGINE_REMOTE_DEBUGGING=%d" hcv-coda-qt-debug-port)))))
     (when a11y (message "coda-qt: joining accessibility session (Orca) on %s" display))
+    (when debug (message "coda-qt: remote debugging on port %d — connect DevTools to http://127.0.0.1:%d"
+                         hcv-coda-qt-debug-port hcv-coda-qt-debug-port))
     (hcv-coda-qt--run-cmd
      (append (list (concat "DISPLAY=" display)
                    (concat "QTWEBENGINE_CHROMIUM_FLAGS=" flags))
+             dbg
              hcv-coda-qt-software-env
              a11y)
-     document display)))
+     document (if debug (concat display " debug") display))))
 
-(defun hcv-coda-qt--launch-wayland (wd document chromium-flags)
+(defun hcv-coda-qt--launch-wayland (wd document chromium-flags &optional debug)
   "Launch coda-qt natively under Wayland on WAYLAND_DISPLAY WD opening DOCUMENT.
-Sets QT_QPA_PLATFORM=wayland.  Aborts if the Wayland socket is absent
-(start the Wayland session first)."
+Sets QT_QPA_PLATFORM=wayland.  With DEBUG non-nil, enable Chromium remote
+debugging (QTWEBENGINE_REMOTE_DEBUGGING + --remote-allow-origins=*).  Aborts if
+the Wayland socket is absent (start the Wayland session first)."
   (unless (hcv-coda-qt--wayland-reachable-p wd)
     (user-error "Wayland socket %s not found in %s — start the Wayland session first"
                 wd (hcv-coda-qt--runtime-dir)))
-  (hcv-coda-qt--run-cmd
-   (append (list (concat "WAYLAND_DISPLAY=" wd)
-                 "QT_QPA_PLATFORM=wayland"
-                 (concat "XDG_RUNTIME_DIR=" (hcv-coda-qt--runtime-dir))
-                 (concat "QTWEBENGINE_CHROMIUM_FLAGS=" (or chromium-flags "")))
-           hcv-coda-qt-software-env)
-   document (concat "wl " wd)))
+  (let* ((flags (string-trim
+                 (concat (or chromium-flags "")
+                         (when debug " --remote-allow-origins=*"))))
+         (dbg (when debug
+                (list (format "QTWEBENGINE_REMOTE_DEBUGGING=%d" hcv-coda-qt-debug-port)))))
+    (when debug (message "coda-qt: remote debugging on port %d — connect DevTools to http://127.0.0.1:%d"
+                         hcv-coda-qt-debug-port hcv-coda-qt-debug-port))
+    (hcv-coda-qt--run-cmd
+     (append (list (concat "WAYLAND_DISPLAY=" wd)
+                   "QT_QPA_PLATFORM=wayland"
+                   (concat "XDG_RUNTIME_DIR=" (hcv-coda-qt--runtime-dir))
+                   (concat "QTWEBENGINE_CHROMIUM_FLAGS=" flags))
+             dbg
+             hcv-coda-qt-software-env)
+     document (concat "wl " wd (if debug " debug" "")))))
 
 (defun hcv-coda-qt--remember (display wayland document chromium-flags)
   "Persist DISPLAY, WAYLAND, DOCUMENT and CHROMIUM-FLAGS for future sessions.
@@ -1410,17 +1434,18 @@ defaults stay in this file and your personal choices live in your customizations
   "Current value of run-parameter widget KEY (:display/:wayland/:document/:chromium)."
   (widget-value (plist-get hcv-coda-qt--widgets key)))
 
-(defun hcv-coda-qt--do-run (platform)
+(defun hcv-coda-qt--do-run (platform &optional debug)
   "Persist the fields, launch coda-qt for PLATFORM (`x11' or `wayland'), then
-close the params buffer (unless the launch aborted — unreachable target)."
+close the params buffer (unless the launch aborted — unreachable target).
+With DEBUG non-nil, launch with Chromium remote debugging enabled."
   (let ((d (hcv-coda-qt--field :display))
         (wl (hcv-coda-qt--field :wayland))
         (doc (hcv-coda-qt--field :document))
         (c (hcv-coda-qt--field :chromium)))
     (hcv-coda-qt--remember d wl doc c)
     (if (eq platform 'wayland)
-        (hcv-coda-qt--launch-wayland wl doc c)
-      (hcv-coda-qt--launch d doc c))
+        (hcv-coda-qt--launch-wayland wl doc c debug)
+      (hcv-coda-qt--launch d doc c debug))
     (when (get-buffer hcv-coda-qt-buffer)
       (kill-buffer hcv-coda-qt-buffer))))
 
@@ -1431,6 +1456,14 @@ close the params buffer (unless the launch aborted — unreachable target)."
 (defun hcv-coda-qt-run-wayland ()
   "Run coda-qt natively under Wayland from the params buffer."
   (interactive) (hcv-coda-qt--do-run 'wayland))
+
+(defun hcv-coda-qt-run-x11-debug ()
+  "Run coda-qt under X11 with Chromium remote debugging enabled."
+  (interactive) (hcv-coda-qt--do-run 'x11 t))
+
+(defun hcv-coda-qt-run-wayland-debug ()
+  "Run coda-qt natively under Wayland with Chromium remote debugging enabled."
+  (interactive) (hcv-coda-qt--do-run 'wayland t))
 
 (defun hcv-coda-qt-cancel ()
   "Close the coda-qt params buffer without launching."
@@ -1443,11 +1476,14 @@ close the params buffer (unless the launch aborted — unreachable target)."
     (define-key m "X" #'hcv-coda-qt-run-x11)
     (define-key m "w" #'hcv-coda-qt-run-wayland)
     (define-key m "W" #'hcv-coda-qt-run-wayland)
+    (define-key m "d" #'hcv-coda-qt-run-x11-debug)
+    (define-key m "D" #'hcv-coda-qt-run-wayland-debug)
     (define-key m "q" #'hcv-coda-qt-cancel)
     m)
-  "Keymap for the coda-qt params buffer: single-key X / W / q run shortcuts.
-Active when point is not inside an editable field (where those letters type
-normally); the buffer opens with point outside the fields.")
+  "Keymap for the coda-qt params buffer: single-key run shortcuts X / W (run),
+d / D (run with remote debugging, X11 / Wayland), q (cancel). Active when point
+is not inside an editable field (where those letters type normally); the buffer
+opens with point outside the fields.")
 
 (defun hcv-coda-qt ()
   "Open a widget buffer to set coda-qt run parameters, with Run buttons.
@@ -1516,8 +1552,14 @@ a Run button or just X (X11) / W (Wayland) / q (cancel)."
                    :notify (lambda (&rest _) (hcv-coda-qt-run-x11)) "Run X11")
     (widget-insert "  ")
     (widget-create 'push-button
+                   :notify (lambda (&rest _) (hcv-coda-qt-run-wayland-debug)) "Debug Wayland")
+    (widget-insert "  ")
+    (widget-create 'push-button
+                   :notify (lambda (&rest _) (hcv-coda-qt-run-x11-debug)) "Debug X11")
+    (widget-insert "  ")
+    (widget-create 'push-button
                    :notify (lambda (&rest _) (hcv-coda-qt-cancel)) "Cancel")
-    (widget-insert "\n\n(W: Run Wayland   X: Run X11   q: Cancel)"))
+    (widget-insert "\n\n(W: Wayland   X: X11   D: Debug Wayland   d: Debug X11   q: Cancel)"))
   (use-local-map hcv-coda-qt-map)
   (widget-setup)
   (goto-char (point-min)))

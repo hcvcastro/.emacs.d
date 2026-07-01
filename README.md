@@ -134,9 +134,9 @@ Wayland:  wayland-0
 Document: <worktree>/test/data/hello.odt
 Chromium: --disable-gpu --disable-gpu-compositing --disable-software-rasterizer --no-sandbox
 
-[Run Wayland]  [Run X11]  [Cancel]
+[Run Wayland]  [Run X11]  [Debug Wayland]  [Debug X11]  [Cancel]
 
-(W: Run Wayland   X: Run X11   q: Cancel)
+(W: Wayland   X: X11   D: Debug Wayland   d: Debug X11   q: Cancel)
 ```
 
 - **Run Wayland** (`W`) — runs natively under Wayland: sets `WAYLAND_DISPLAY`
@@ -146,15 +146,20 @@ Chromium: --disable-gpu --disable-gpu-compositing --disable-software-rasterizer 
   socket (wlroots auto-picks the name), preferring one other than Emacs's own.
 - **Run X11** (`X`) — sets `DISPLAY` to the *Display* field and first checks the
   display is reachable (`xdpyinfo`/`xset`), aborting otherwise.
-- Both force software rendering (no GPU) and export the editable
-  `QTWEBENGINE_CHROMIUM_FLAGS`. The single-key `W`/`X`/`q` shortcuts work outside
-  the fields (inside a field those letters type normally).
+- **Debug Wayland / Debug X11** (`D` / `d`) — same as the Run buttons but enable
+  Chromium remote debugging so you can inspect coda-qt's JavaScript with Chrome
+  DevTools: set `QTWEBENGINE_REMOTE_DEBUGGING` (port `hcv-coda-qt-debug-port`,
+  default 9222) and add `--remote-allow-origins=*` to the flags. Connect DevTools
+  to `http://127.0.0.1:9222` (from a PC, tunnel it with `coda/coda-qt-devtools.sh`).
+- All force software rendering (no GPU) and export the editable
+  `QTWEBENGINE_CHROMIUM_FLAGS`. The single-key `W`/`X`/`D`/`d`/`q` shortcuts work
+  outside the fields (inside a field those letters type normally).
 - The *Display*, *Wayland* and Chromium-flags values persist across sessions via
   Customize (only when changed); the document stays per-worktree.
 
 Customize: `hcv-coda-qt-display`, `hcv-coda-qt-wayland-display`,
-`hcv-coda-qt-chromium-flags`. The binary lives out-of-tree under
-`hcv-cool-default-build-dir` (`<build>/qt/coda-qt`).
+`hcv-coda-qt-chromium-flags`, `hcv-coda-qt-debug-port`. The binary lives
+out-of-tree under `hcv-cool-default-build-dir` (`<build>/qt/coda-qt`).
 
 ## Running Collabora Office (soffice)
 
