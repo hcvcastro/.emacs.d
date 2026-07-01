@@ -1224,7 +1224,7 @@ The embedded Chromium flags are added separately from
   "When non-nil, the X11 Run joins the headless accessibility session (Orca).
 If a11y-start.sh's env file exists for the chosen display (see
 `hcv-coda-qt-a11y-env-file'), its D-Bus / Qt-a11y variables are exported into
-coda-qt along with CODA_RENDERER_A11Y=1, and --force-renderer-accessibility is
+coda-qt along with QT_ACCESSIBILITY=1, and --force-renderer-accessibility is
 added to the Chromium flags, so Orca can read the UI."
   :type 'boolean)
 
@@ -1235,7 +1235,7 @@ added to the Chromium flags, so Orca can read the UI."
 (defun hcv-coda-qt--a11y-env (display)
   "Environment entries (\"VAR=VAL\") that join the a11y session on DISPLAY, or nil.
 Reads the `export VAR=...' lines from the a11y env file for DISPLAY's number
-\(skipping DISPLAY itself, which the launcher sets) and appends CODA_RENDERER_A11Y=1.
+\(skipping DISPLAY and QT_ACCESSIBILITY) and appends QT_ACCESSIBILITY=1.
 Returns nil when `hcv-coda-qt-accessibility' is off or the env file is absent —
 i.e. when the headless a11y stack isn't running."
   (when hcv-coda-qt-accessibility
@@ -1250,9 +1250,9 @@ i.e. when the headless a11y stack isn't running."
                     "^[ \t]*export[ \t]+\\([A-Za-z_][A-Za-z0-9_]*\\)=\\(.*\\)$" nil t)
               (let ((name (match-string 1))
                     (val  (string-trim (match-string 2) "[ \t'\"]+" "[ \t'\"]+")))
-                (unless (string= name "DISPLAY")
+                (unless (member name '("DISPLAY" "QT_ACCESSIBILITY"))
                   (push (concat name "=" val) vars))))
-            (nreverse (cons "CODA_RENDERER_A11Y=1" vars))))))))
+            (nreverse (cons "QT_ACCESSIBILITY=1" vars))))))))
 
 (defun hcv-coda-qt-binary ()
   "Path to the Qt app binary for the current COOL build."
