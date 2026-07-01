@@ -14,6 +14,28 @@
 (require 'gnus)
 (require 'eglot)
 
+;; --- Clipboard bridge --------------------------------------------------------
+;; Use xclip whenever an X DISPLAY is reachable — a graphical frame, OR a text
+;; terminal under `ssh -Y' (xclip talks to the forwarded X, encrypted, no
+;; `-listen tcp'/`xhost'). This is the robust path: gnome-terminal/VTE (0.80 here)
+;; does NOT honor OSC 52 clipboard writes, so on plain SSH into gnome-terminal
+;; clipboard-out won't work — connect with `ssh -Y' to get xclip. clipetty (OSC 52)
+;; is the fallback only when there's no DISPLAY, for OSC-52-capable terminals
+;; (kitty/wezterm/foot/xterm). Picks one per frame so they don't fight over
+;; `interprogram-cut-function'. (Mixed GUI+TTY daemon: last frame wins; fine for a
+;; single-frame Emacs per machine.)
+(defun hcv-setup-clipboard (&optional frame)
+  "Enable xclip when an X DISPLAY is reachable, else clipetty (OSC 52)."
+  (with-selected-frame (or frame (selected-frame))
+    (if (or (display-graphic-p) (getenv "DISPLAY"))
+        (progn
+          (when (fboundp 'global-clipetty-mode) (global-clipetty-mode -1))
+          (when (fboundp 'xclip-mode) (xclip-mode 1)))
+      (when (fboundp 'xclip-mode) (xclip-mode -1))
+      (when (require 'clipetty nil t) (global-clipetty-mode 1)))))
+(add-hook 'after-init-hook #'hcv-setup-clipboard)
+(add-hook 'server-after-make-frame-hook #'hcv-setup-clipboard)
+
 ;; Highlight corresponding parentheses when cursor is on one
 (show-paren-mode t)
 
